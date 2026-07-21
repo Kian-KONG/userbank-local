@@ -46,6 +46,7 @@ class UploadBody(BaseModel):
     bundle_dir: str
     mode: str = "auto"
     org_id: str | None = None
+    bundle_type: str | None = None
 
 
 @app.get("/health")
@@ -98,7 +99,12 @@ def jobs_export(body: ExportBody) -> dict[str, Any]:
 
 @app.post("/jobs/upload")
 def jobs_upload(body: UploadBody) -> dict[str, Any]:
-    job = start_upload_job(body.bundle_dir, mode=body.mode, org_id=body.org_id)
+    job = start_upload_job(
+        body.bundle_dir,
+        mode=body.mode,
+        org_id=body.org_id,
+        bundle_type=body.bundle_type,
+    )
     return job_to_dict(job)
 
 
@@ -106,6 +112,7 @@ def jobs_upload(body: UploadBody) -> dict[str, Any]:
 async def jobs_pipeline(
     file: UploadFile | None = File(None),
     path: str | None = Form(None),
+    track: str = Form("knowledge"),
     document_id: str | None = Form(None),
     filename: str | None = Form(None),
     org_id: str | None = Form(None),
@@ -113,10 +120,13 @@ async def jobs_pipeline(
     skip_mineru: bool = Form(False),
     upload: bool = Form(True),
 ) -> dict[str, Any]:
+    if track not in ("knowledge", "survey"):
+        raise HTTPException(400, "track must be knowledge or survey")
     settings = get_settings()
     input_path = await _resolve_input(file, path, settings.work_dir() / "uploads")
     job = start_pipeline_job(
         input_path,
+        track=track,  # type: ignore[arg-type]
         document_id=document_id,
         filename=filename or (file.filename if file else None),
         org_id=org_id,

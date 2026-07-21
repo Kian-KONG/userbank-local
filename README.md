@@ -40,12 +40,22 @@ UserBank/
   DeepRead/
 ```
 
+## Tracks
+
+| Track | Inputs | Import path |
+|-------|--------|-------------|
+| **Knowledge** | PDF / md / `*_corpus.json` | `/knowledge/import-vectors` |
+| **Survey** | `.xlsx` / `.docx` / `chunks.jsonl(.gz)` | `/survey/import-vectors` |
+
+Embeddings always run on the laptop (local rag). Progress: UI bar + job `phase`/`progress`, or `make logs`.
+
 ## CLI
 
 ```bash
 uv run ub-local serve
 uv run ub-local parse ./doc.pdf --out ./output/parse
 uv run ub-local export --corpus ./doc_corpus.json --output-dir ./output/bundle --document-id doc
+uv run ub-local survey-export ./data.xlsx --output-dir ./output/survey_bundle
 uv run ub-local upload --bundle-dir ./output/bundle --mode auto
 ```
 

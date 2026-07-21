@@ -16,14 +16,19 @@ type Job = {
   id: string;
   kind: string;
   state: string;
+  phase?: string;
+  progress?: number;
   error?: string | null;
   result?: Record<string, unknown> | null;
   logs?: string[];
 };
 
+type Track = 'knowledge' | 'survey';
+
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [track, setTrack] = useState<Track>('knowledge');
   const [orgId, setOrgId] = useState('');
   const [mode, setMode] = useState('auto');
   const [upload, setUpload] = useState(true);
@@ -31,6 +36,16 @@ export default function App() {
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const accept =
+    track === 'survey'
+      ? '.xlsx,.xlsm,.docx,.jsonl,.gz,application/gzip'
+      : '.pdf,.md,.markdown,.json';
+
+  const dropHint =
+    track === 'survey'
+      ? 'Drop Excel / Word / chunks.jsonl.gz'
+      : 'Drop PDF / MD / *_corpus.json';
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -69,7 +84,11 @@ export default function App() {
 
   const startPipeline = async () => {
     if (!file) {
-      setError('Choose a PDF / markdown / corpus.json first');
+      setError(
+        track === 'survey'
+          ? 'Choose an Excel / Word / chunks.jsonl(.gz) file first'
+          : 'Choose a PDF / markdown / corpus.json first',
+      );
       return;
     }
     setBusy(true);
@@ -77,6 +96,7 @@ export default function App() {
     setJob(null);
     const body = new FormData();
     body.append('file', file);
+    body.append('track', track);
     body.append('mode', mode);
     body.append('upload', String(upload));
     body.append('skip_mineru', String(skipMineru));
@@ -116,12 +136,14 @@ export default function App() {
     );
   }, [health]);
 
+  const progress = Math.round(job?.progress ?? 0);
+
   return (
     <div className="app">
       <h1 className="brand">userbank-local</h1>
       <p className="lead">
-        Local GPU ingest on this Mac: MinerU / DeepRead → embed via RAG → HTTP or rsync upload to
-        production. Not deployed online.
+        Laptop ingest: parse → embed on local RAG → HTTP/rsync to production. Knowledge = PDF/papers;
+        Survey = Excel/Word/jsonl. Embeddings are computed here, not on the server.
       </p>
 
       <section className="panel">
@@ -144,6 +166,22 @@ export default function App() {
       </section>
 
       <section className="panel">
+        <div className="row">
+          <label>
+            Track{' '}
+            <select
+              value={track}
+              onChange={(e) => {
+                setTrack(e.target.value as Track);
+                setFile(null);
+              }}
+            >
+              <option value="knowledge">Knowledge (PDF / papers)</option>
+              <option value="survey">Survey (Excel / Word / jsonl)</option>
+            </select>
+          </label>
+        </div>
+
         <label
           className="drop"
           onDragOver={(e) => e.preventDefault()}
@@ -152,11 +190,11 @@ export default function App() {
             onDrop(e.dataTransfer.files);
           }}
         >
-          <strong>{file ? file.name : 'Drop PDF / MD / *_corpus.json'}</strong>
+          <strong>{file ? file.name : dropHint}</strong>
           <span className="muted">or click to choose a file</span>
           <input
             type="file"
-            accept=".pdf,.md,.markdown,.json"
+            accept={accept}
             style={{ display: 'none' }}
             onChange={(e) => onDrop(e.target.files)}
           />
@@ -179,14 +217,16 @@ export default function App() {
             <input type="checkbox" checked={upload} onChange={(e) => setUpload(e.target.checked)} />{' '}
             Upload after embed
           </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={skipMineru}
-              onChange={(e) => setSkipMineru(e.target.checked)}
-            />{' '}
-            Skip MinerU
-          </label>
+          {track === 'knowledge' ? (
+            <label>
+              <input
+                type="checkbox"
+                checked={skipMineru}
+                onChange={(e) => setSkipMineru(e.target.checked)}
+              />{' '}
+              Skip MinerU
+            </label>
+          ) : null}
         </div>
 
         <div className="row">
@@ -206,7 +246,14 @@ export default function App() {
         <section className="panel">
           <strong>
             Job {job.id.slice(0, 8)} · {job.kind} · {job.state}
+            {job.phase ? ` · ${job.phase}` : ''}
           </strong>
+          <div className="progress-wrap" aria-label="job progress">
+            <div className="progress-bar" style={{ width: `${progress}%` }} />
+          </div>
+          <p className="muted">
+            {progress}%{job.phase ? ` — ${job.phase}` : ''}
+          </p>
           {job.error ? <p className="error">{job.error}</p> : null}
           {job.result ? (
             <pre className="muted" style={{ marginTop: '0.75rem' }}>

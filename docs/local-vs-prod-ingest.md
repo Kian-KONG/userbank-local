@@ -3,17 +3,17 @@
 | | Local (`userbank-local`) | Production |
 |--|--------------------------|------------|
 | Repos | + MinerU + DeepRead | api + web + **rag** (runtime) |
-| PDF quality OCR | MinerU → DeepRead corpus | No GPU tools |
-| Online upload | n/a (this UI is localhost) | Text + PDF → Qwen vision via api→rag |
-| Embed / retrieve | Laptop calls local rag `/embeddings` for bundles | Always-on rag for retrieve/index/vision |
-| Push to prod | HTTP `/knowledge/import-vectors` or SSH rsync | api + staging import |
+| Knowledge track | PDF / papers → MinerU → DeepRead | Text + PDF → Qwen vision |
+| Survey track | Excel / Word / `chunks.jsonl.gz` | `/survey/import-vectors` |
+| Embed | **Always on laptop** via local rag `/embeddings` | Import does **not** re-embed |
+| Progress | UI job `phase` + `progress` % + logs; `make logs` | — |
+| Push to prod | HTTP or SSH rsync pre-embedded bundle | api staging / import-vectors |
 
 ```
-PDF/Office → MinerU → DeepRead (*_corpus.json)
-  → export (RAG embed on laptop)
-  → upload (HTTP or rsync) → userbank-api → rag /index → Qdrant
+Knowledge: PDF → MinerU → DeepRead → embed (laptop) → upload
+Survey:    xlsx/docx/jsonl → chunks → embed (laptop) → upload
 ```
 
-**Keep `userbank-rag`.** It is the production retrieval service; this repo only orchestrates laptop ingest.
+Progress: React polls `GET /jobs/:id` (`phase`: parse|embed|upload, `progress` 0–100).
 
 Env: copy `.env.example`. Never put MinerU/DeepRead into `prep-single-host` / `deploy-single-host`.

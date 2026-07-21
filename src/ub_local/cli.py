@@ -8,6 +8,8 @@ import uvicorn
 
 from ub_local.config import get_settings
 from ub_local.orchestrate.parse import parse_document
+from ub_local.orchestrate.survey_parse import parse_survey_input
+from ub_local.pipeline.embed_seed import embed_seed_bundle
 from ub_local.pipeline.export_knowledge import export_knowledge_bundle
 from ub_local.pipeline.upload import upload_bundle
 from ub_local.pipeline.types import UploadMode
@@ -66,11 +68,34 @@ def upload_cmd(
     mode: UploadMode = typer.Option("auto", "--mode"),
     org: Optional[str] = typer.Option(None, "--org"),
     api: Optional[str] = typer.Option(None, "--api"),
+    bundle_type: Optional[str] = typer.Option(None, "--type", help="knowledge|survey"),
 ) -> None:
     result = upload_bundle(
-        bundle_dir=bundle_dir, mode=mode, org_id=org, api_url=api
+        bundle_dir=bundle_dir,
+        mode=mode,
+        org_id=org,
+        api_url=api,
+        bundle_type=bundle_type,
     )
     typer.echo(f"upload complete mode={result['mode']}")
+
+
+@app.command("survey-export")
+def survey_export_cmd(
+    input_path: Path = typer.Argument(..., help="xlsx / docx / chunks.jsonl(.gz)"),
+    output_dir: Path = typer.Option(..., "--output-dir"),
+    org: Optional[str] = typer.Option(None, "--org"),
+) -> None:
+    """Parse survey input and embed into an uploadable survey bundle."""
+    settings = get_settings()
+    work = settings.work_dir() / "cli-survey"
+    chunks = parse_survey_input(input_path, work / "chunks")
+    result = embed_seed_bundle(
+        chunks_path=chunks,
+        output_dir=output_dir,
+        org_id=org,
+    )
+    typer.echo(result["output_dir"])
 
 
 if __name__ == "__main__":
