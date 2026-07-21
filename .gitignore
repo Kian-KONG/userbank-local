@@ -1,0 +1,17 @@
+.env
+.env.pipeline
+.dev-pids/
+.dev-logs/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+output/
+web/node_modules/
+web/dist/
+.DS_Store
+*.log
