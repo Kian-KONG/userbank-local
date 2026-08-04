@@ -1,1 +1,0 @@
-"""Knowledge/survey local pipeline."""

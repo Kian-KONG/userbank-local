@@ -1,1 +1,0 @@
-"""HTTP / rsync upload sync."""

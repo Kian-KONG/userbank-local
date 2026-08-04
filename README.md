@@ -9,7 +9,7 @@ Orchestrates **parse → embed (via userbank-rag) → upload (import-vectors)**.
 ```bash
 cp .env.example .env
 # Start rag first (sibling repo):
-#   cd ../userbank-rag && EMBED_BACKEND=mock make rag-up && make rag-run
+#   cd ../userbank-rag && make rag-up && cargo run -p userbank-rag
 
 cargo run -p ub-local -- serve
 # web (optional)
@@ -26,6 +26,5 @@ cargo run -p ub-local -- upload --bundle-dir ./output/bundle --mode http
 
 ## Notes
 
-- Python implementation archived under `legacy-python/`.
 - Frontend in `web/` unchanged; talks to Rust API on `:8780`.
 - Requires running `userbank-rag` for embeddings.
