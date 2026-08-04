@@ -1,64 +1,31 @@
-# userbank-local
+# userbank-local (Rust)
 
-Laptop-only knowledge ingest for UserBank (M4 Mac Mini / GPU workstation).
+Laptop-only knowledge ingest console for UserBank.
 
-**Not deployed to production.** This repo orchestrates **MinerU → DeepRead → local RAG embed → HTTP/rsync upload**.
-
-## Repo roles (do not merge these)
-
-| Repo | Role | Deploy online? |
-|------|------|----------------|
-| **userbank-rag** | Runtime sidecar: embed / retrieve / index / vision / rerank → Qdrant | **Yes** (always on) |
-| **userbank-api** | Business API, PG/OSS, calls rag, receives import-vectors | **Yes** |
-| **userbank-web** | Product UI (PDF + text upload → Qwen vision via api) | **Yes** |
-| **userbank-local** (this) | Local GPU ingest console + sync to prod | **No** |
-| MinerU / DeepRead | Local parse tooling (siblings) | **No** |
-
-`userbank-local` **does not replace** `userbank-rag`. Online chat/search still goes `web → api → rag → Qdrant`. Local only uses rag’s `/embeddings` on the laptop when building bundles.
+Orchestrates **parse → embed (via userbank-rag) → upload (import-vectors)**. Does not load embedding models (saves RAM).
 
 ## Quick start
 
 ```bash
-cd userbank-local
-cp .env.example .env   # set SURVEY_IMPORT_SECRET, RAG_SERVICE_URL, etc.
-make install           # Python ≥3.11 (prefer 3.12) + web npm
-make up
-# web  http://127.0.0.1:5174
-# api  http://127.0.0.1:8780/health
-make down
+cp .env.example .env
+# Start rag first (sibling repo):
+#   cd ../userbank-rag && EMBED_BACKEND=mock make rag-up && make rag-run
+
+cargo run -p ub-local -- serve
+# web (optional)
+cd web && npm install && npm run dev   # http://127.0.0.1:5174
 ```
-
-Sibling layout expected:
-
-```text
-UserBank/
-  userbank-local/   # this repo
-  userbank-api/
-  userbank-rag/
-  userbank-web/
-  MinerU/
-  DeepRead/
-```
-
-## Tracks
-
-| Track | Inputs | Import path |
-|-------|--------|-------------|
-| **Knowledge** | PDF / md / `*_corpus.json` | `/knowledge/import-vectors` |
-| **Survey** | `.xlsx` / `.docx` / `chunks.jsonl(.gz)` | `/survey/import-vectors` |
-
-Embeddings always run on the laptop (local rag). Progress: UI bar + job `phase`/`progress`, or `make logs`.
 
 ## CLI
 
 ```bash
-uv run ub-local serve
-uv run ub-local parse ./doc.pdf --out ./output/parse
-uv run ub-local export --corpus ./doc_corpus.json --output-dir ./output/bundle --document-id doc
-uv run ub-local survey-export ./data.xlsx --output-dir ./output/survey_bundle
-uv run ub-local upload --bundle-dir ./output/bundle --mode auto
+cargo run -p ub-local -- parse ./doc.md --out ./output/parse
+cargo run -p ub-local -- export --corpus ./output/parse/doc_corpus.json --output-dir ./output/bundle --document-id doc
+cargo run -p ub-local -- upload --bundle-dir ./output/bundle --mode http
 ```
 
-## Docs
+## Notes
 
-See [docs/local-vs-prod-ingest.md](docs/local-vs-prod-ingest.md).
+- Python implementation archived under `legacy-python/`.
+- Frontend in `web/` unchanged; talks to Rust API on `:8780`.
+- Requires running `userbank-rag` for embeddings.
