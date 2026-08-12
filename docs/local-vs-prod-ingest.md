@@ -16,4 +16,4 @@ Survey:    xlsx/docx/jsonl → chunks → embed (laptop) → upload
 
 Progress: React polls `GET /jobs/:id` (`phase`: parse|embed|upload, `progress` 0–100).
 
-Env: copy `.env.example`. Never put MinerU/DeepRead into `prep-single-host` / `deploy-single-host`.
+Env: copy `.env.example`. Never put MinerU/DeepRead into `prep-single-host` / `deploy-single-host`. Control plane is Python FastAPI (`make serve`); UI remains React in `web/`.
