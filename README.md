@@ -2,7 +2,7 @@
 
 Laptop-only knowledge ingest console for UserBank.
 
-Orchestrates **parse → embed (via userbank-rag) → upload (import-vectors)**. Does not load embedding models (saves RAM).
+Orchestrates **parse → embed (via userbank-rag) → rsync/SSH upload**. Does not load embedding models (saves RAM).
 
 Embed quant is fixed to the same **Q8_0** GGUF as production (`Qwen3-Embedding-0.6B-Q8_0.gguf` on the rag host).
 
@@ -24,10 +24,11 @@ cd web && npm install && npm run dev   # http://127.0.0.1:5174
 ```bash
 .venv/bin/python -m src.main parse ./doc.md --out ./output/parse
 .venv/bin/python -m src.main export --corpus ./output/parse/doc_corpus.json --output-dir ./output/bundle --document-id doc
-.venv/bin/python -m src.main upload --bundle-dir ./output/bundle --mode http
+.venv/bin/python -m src.main upload --bundle-dir ./output/bundle
 ```
 
 ## Notes
 
 - Frontend in `web/` talks to the FastAPI control plane on `:8780`.
-- Requires running `userbank-rag` for embeddings (Python + llama.cpp GGUF).
+- Requires running `userbank-rag` for embeddings (same `qwen3-embedding:0.6b` / 1024 as production).
+- Upload is **rsync over SSH only**. Set `SSH_TARGET`. Default `REMOTE_IMPORT_CMD` is `docker exec userbank-prod-app-1 node dist/scripts/import-staging-bundle.js --job ${JOB_ID}`.

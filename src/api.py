@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .config import get_settings
 from .jobs import JobStore, health_payload
@@ -45,7 +45,6 @@ def create_app(store: JobStore | None = None) -> FastAPI:
         job = job_store.start_pipeline(
             input_path,
             "knowledge",
-            "http",
             False,
             skip,
             None,
@@ -59,7 +58,6 @@ def create_app(store: JobStore | None = None) -> FastAPI:
         job = job_store.start_pipeline(
             Path(body.corpus_path),
             "knowledge",
-            "http",
             False,
             True,
             body.org_id,
@@ -72,7 +70,6 @@ def create_app(store: JobStore | None = None) -> FastAPI:
     async def jobs_upload(body: UploadBody) -> dict[str, Any]:
         job = job_store.start_upload(
             Path(body.bundle_dir),
-            body.mode or "auto",
             body.org_id,
         )
         return job.to_dict()
@@ -82,7 +79,6 @@ def create_app(store: JobStore | None = None) -> FastAPI:
         file: UploadFile | None = File(None),
         path: str | None = Form(None),
         track: str = Form("knowledge"),
-        mode: str = Form("auto"),
         upload: str = Form("true"),
         skip_mineru: str = Form("false"),
         org_id: str | None = Form(None),
@@ -96,7 +92,6 @@ def create_app(store: JobStore | None = None) -> FastAPI:
         job = job_store.start_pipeline(
             input_path,
             track,
-            mode,
             do_upload,
             skip,
             org_id,
@@ -117,7 +112,6 @@ class ExportBody(BaseModel):
 
 class UploadBody(BaseModel):
     bundle_dir: str
-    mode: str | None = Field(default="auto")
     org_id: str | None = None
 
 

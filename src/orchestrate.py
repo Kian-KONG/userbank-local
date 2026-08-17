@@ -20,7 +20,13 @@ def check_deepread() -> dict:
     return {"ok": path_exists(p), "path": str(p)}
 
 
-def parse_document(input_path: Path, work: Path, skip_mineru: bool = False) -> Path:
+def parse_document(
+    input_path: Path,
+    work: Path,
+    skip_mineru: bool = False,
+    formula: bool | None = None,
+    table: bool | None = None,
+) -> Path:
     """PDF → MinerU markdown → DeepRead corpus (all local)."""
     work = work.expanduser().resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -48,7 +54,9 @@ def parse_document(input_path: Path, work: Path, skip_mineru: bool = False) -> P
     if skip_mineru:
         raise RuntimeError("--skip-mineru requires markdown or corpus input")
 
-    md_path = _mineru_pdf_to_markdown(input_path, work / "mineru_out")
+    md_path = _mineru_pdf_to_markdown(
+        input_path, work / "mineru_out", formula=formula, table=table
+    )
     return _deepread_parse_markdown(md_path, work)
 
 
@@ -96,12 +104,19 @@ def _page_chunks(page_count: int, chunk_size: int) -> list[tuple[int, int]]:
     return chunks
 
 
-def _mineru_pdf_to_markdown(pdf_path: Path, out_dir: Path) -> Path:
+def _mineru_pdf_to_markdown(
+    pdf_path: Path,
+    out_dir: Path,
+    formula: bool | None = None,
+    table: bool | None = None,
+) -> Path:
     s = get_settings()
     mineru_root = s.mineru_path()
     if not path_exists(mineru_root):
         raise RuntimeError(f"MinerU not found at {mineru_root}")
 
+    use_formula = s.mineru_formula if formula is None else formula
+    use_table = s.mineru_table if table is None else table
     out_dir = out_dir.expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     py = s.resolved_mineru_python()
@@ -110,7 +125,8 @@ def _mineru_pdf_to_markdown(pdf_path: Path, out_dir: Path) -> Path:
     print(
         f"==> MinerU: {page_count} pages, {len(chunks)} chunk(s) "
         f"(size={s.mineru_page_chunk_size}, backend={s.mineru_backend}"
-        f"{', effort=' + s.mineru_effort if s.mineru_backend.startswith('hybrid') else ''})"
+        f"{', effort=' + s.mineru_effort if s.mineru_backend.startswith('hybrid') else ''}"
+        f", formula={str(use_formula).lower()}, table={str(use_table).lower()})"
     )
 
     md_parts: list[tuple[int, int, Path]] = []
@@ -124,7 +140,16 @@ def _mineru_pdf_to_markdown(pdf_path: Path, out_dir: Path) -> Path:
                 md_parts.append((start, end, md))
                 continue
         print(f"==> chunk {index}/{len(chunks)} pages {start}-{end}")
-        _run_mineru_chunk(pdf_path, chunk_dir, start, end, mineru_root, py)
+        _run_mineru_chunk(
+            pdf_path,
+            chunk_dir,
+            start,
+            end,
+            mineru_root,
+            py,
+            formula=use_formula,
+            table=use_table,
+        )
         md = find_markdown(chunk_dir)
         if md is None:
             raise RuntimeError(f"MinerU produced no markdown under {chunk_dir}")
@@ -137,19 +162,19 @@ def _mineru_pdf_to_markdown(pdf_path: Path, out_dir: Path) -> Path:
     return merged
 
 
-def _run_mineru_chunk(
+def _mineru_client_cmd(
+    *,
+    py: str,
     pdf_path: Path,
     chunk_dir: Path,
     start: int,
     end: int,
-    mineru_root: Path,
-    py: str,
-) -> None:
-    s = get_settings()
-    chunk_dir = chunk_dir.expanduser().resolve()
-    chunk_dir.mkdir(parents=True, exist_ok=True)
-    backend = (s.mineru_backend or "vlm-engine").strip()
-    api_url = s.mineru_api_url.strip()
+    backend: str,
+    formula: bool,
+    table: bool,
+    effort: str,
+    api_url: str,
+) -> list[str]:
     cmd = [
         py,
         "-m",
@@ -165,12 +190,12 @@ def _run_mineru_chunk(
         "-e",
         str(end),
         "-f",
-        "true",
+        "true" if formula else "false",
         "-t",
-        "true",
+        "true" if table else "false",
     ]
     if backend.startswith("hybrid"):
-        effort = (s.mineru_effort or "high").strip()
+        effort = (effort or "high").strip()
         cmd.extend(["--effort", effort])
         if effort == "high":
             cmd.extend(["--image-analysis", "true"])
@@ -178,7 +203,35 @@ def _run_mineru_chunk(
         cmd.extend(["--api-url", api_url])
     elif backend in HTTP_CLIENT_BACKENDS:
         raise RuntimeError(f"{backend} requires MINERU_API_URL")
+    return cmd
 
+
+def _run_mineru_chunk(
+    pdf_path: Path,
+    chunk_dir: Path,
+    start: int,
+    end: int,
+    mineru_root: Path,
+    py: str,
+    formula: bool = True,
+    table: bool = True,
+) -> None:
+    s = get_settings()
+    chunk_dir = chunk_dir.expanduser().resolve()
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    backend = (s.mineru_backend or "vlm-engine").strip()
+    cmd = _mineru_client_cmd(
+        py=py,
+        pdf_path=pdf_path,
+        chunk_dir=chunk_dir,
+        start=start,
+        end=end,
+        backend=backend,
+        formula=formula,
+        table=table,
+        effort=s.mineru_effort,
+        api_url=s.mineru_api_url.strip(),
+    )
     env = _mineru_env()
     timeout = max(60.0, float(s.mineru_task_timeout_seconds))
     print(f"==> MinerU: {' '.join(cmd)}")

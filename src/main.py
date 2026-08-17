@@ -24,6 +24,16 @@ def main() -> None:
     parse.add_argument("input", type=Path)
     parse.add_argument("--out", type=Path, default=None)
     parse.add_argument("--skip-mineru", action="store_true")
+    parse.add_argument(
+        "--no-formula",
+        action="store_true",
+        help="Skip MinerU formula parsing (faster when the PDF has no math)",
+    )
+    parse.add_argument(
+        "--no-table",
+        action="store_true",
+        help="Skip MinerU table parsing (rarely useful; tables stay on by default)",
+    )
 
     export = sub.add_parser("export", help="Export knowledge bundle (flatten + embed)")
     export.add_argument("--corpus", type=Path, required=True)
@@ -32,11 +42,10 @@ def main() -> None:
     export.add_argument("--filename", default=None)
     export.add_argument("--org", default=None)
 
-    upload = sub.add_parser("upload", help="Upload bundle to userbank-api")
+    upload = sub.add_parser("upload", help="rsync bundle to ECS and trigger server import")
     upload.add_argument("--bundle-dir", type=Path, required=True)
-    upload.add_argument("--mode", default="auto")
     upload.add_argument("--org", default=None)
-    upload.add_argument("--api", default=None)
+    upload.add_argument("--job-id", default=None)
 
     args = parser.parse_args()
     if args.command == "serve":
@@ -48,7 +57,13 @@ def main() -> None:
 
     if args.command == "parse":
         work = args.out or ensure_output_subdir("cli-parse")
-        corpus = parse_document(args.input, work, args.skip_mineru)
+        corpus = parse_document(
+            args.input,
+            work,
+            args.skip_mineru,
+            formula=False if args.no_formula else None,
+            table=False if args.no_table else None,
+        )
         print(corpus)
         return
 
@@ -68,9 +83,9 @@ def main() -> None:
 
     if args.command == "upload":
         result = asyncio.run(
-            upload_bundle(args.bundle_dir, args.mode, args.org, args.api)
+            upload_bundle(args.bundle_dir, args.org, job_id=args.job_id)
         )
-        print(f"upload complete mode={result.get('mode', '?')}")
+        print(f"upload complete mode={result.get('mode', 'rsync')} job={result.get('job_id', '?')}")
         return
 
 

@@ -5,10 +5,10 @@
 | Repos | + MinerU + DeepRead | api + web + **rag** (runtime) |
 | Knowledge track | PDF / papers → MinerU → DeepRead | Text + PDF → Qwen vision |
 | Image / PPT track | PDF / PPTX → Plus per page → Max outline | — |
-| Survey track | Excel / Word / `chunks.jsonl.gz` | `/survey/import-vectors` |
-| Embed | **Always on laptop** via local rag `/embeddings` | Import does **not** re-embed |
+| Survey track | Excel / Word / `chunks.jsonl.gz` | rsync staging import |
+| Embed | **Always on laptop** via userbank-rag 0.6B Q8_0 (dim 1024) | Import does **not** re-embed |
 | Progress | UI job `phase` + `progress` % + logs; `make logs` | — |
-| Push to prod | HTTP or SSH rsync pre-embedded bundle | api staging / import-vectors |
+| Push to prod | SSH rsync pre-embedded bundle → server import | api staging importer |
 
 ```
 Knowledge: PDF → MinerU → DeepRead → embed (laptop) → upload

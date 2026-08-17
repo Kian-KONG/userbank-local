@@ -75,7 +75,7 @@ PY
 EOF
 
 # Trigger import inside app container or on host
-IMPORT_CMD="${REMOTE_IMPORT_CMD:-cd /app && npx tsx scripts/survey/import-staging-bundle.ts --job ${JOB_ID}}"
+IMPORT_CMD="${REMOTE_IMPORT_CMD:-docker exec userbank-prod-app-1 node dist/scripts/import-staging-bundle.js --job ${JOB_ID}}"
 ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "${SSH_TARGET}" "${IMPORT_CMD}"
 
 echo "rsync + import done: job=${JOB_ID}"

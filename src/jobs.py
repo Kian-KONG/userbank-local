@@ -93,7 +93,6 @@ class JobStore:
         self,
         input_path: Path,
         track: str,
-        mode: str,
         upload: bool,
         skip_mineru: bool,
         org_id: str | None,
@@ -107,7 +106,6 @@ class JobStore:
                 job.id,
                 input_path,
                 track,
-                mode,
                 upload,
                 skip_mineru,
                 org_id,
@@ -120,19 +118,17 @@ class JobStore:
     def start_upload(
         self,
         bundle_dir: Path,
-        mode: str,
         org_id: str | None,
     ) -> Job:
         job = Job.new("upload")
         self.upsert_sync(job)
-        asyncio.create_task(self._run_upload_task(job.id, bundle_dir, mode, org_id))
+        asyncio.create_task(self._run_upload_task(job.id, bundle_dir, org_id))
         return job
 
     async def _run_upload_task(
         self,
         job_id: str,
         bundle_dir: Path,
-        mode: str,
         org_id: str | None,
     ) -> None:
         def mark_running(j: Job) -> None:
@@ -141,7 +137,7 @@ class JobStore:
 
         await self.mutate(job_id, mark_running)
         try:
-            result = await upload_bundle(bundle_dir, mode, org_id, None)
+            result = await upload_bundle(bundle_dir, org_id, job_id=job_id)
 
             def done(j: Job) -> None:
                 j.state = "done"
@@ -165,7 +161,6 @@ class JobStore:
         job_id: str,
         input_path: Path,
         track: str,
-        mode: str,
         upload: bool,
         skip_mineru: bool,
         org_id: str | None,
@@ -186,7 +181,6 @@ class JobStore:
                     job_id,
                     input_path,
                     track,
-                    mode,
                     upload,
                     skip_mineru,
                     org_id,
@@ -218,7 +212,6 @@ async def run_pipeline(
     job_id: str,
     input_path: Path,
     track: str,
-    mode: str,
     upload: bool,
     skip_mineru: bool,
     org_id: str | None,
@@ -271,7 +264,7 @@ async def run_pipeline(
     if not upload:
         return {"export": export, "uploaded": False}
     await store.mutate(job_id, lambda j: j.set_progress("upload", 90.0, "uploading"))
-    uploaded = await upload_bundle(export_dir, mode, org_id, None)
+    uploaded = await upload_bundle(export_dir, org_id, job_id=job_id)
     return {"export": export, "upload": uploaded}
 
 
@@ -286,6 +279,6 @@ async def health_payload() -> dict[str, Any]:
         "deepread": check_deepread(),
         "ssh_configured": bool(s.ssh_target.strip()),
         "org_id": s.survey_org_id,
-        "api_url": s.userbank_api_url,
+        "ssh_target": s.ssh_target.strip(),
         "work_dir": str(s.work_dir()),
     }

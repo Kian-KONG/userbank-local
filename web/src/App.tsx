@@ -9,7 +9,7 @@ type Health = {
   deepread?: { ok?: boolean; path?: string };
   ssh_configured?: boolean;
   org_id?: string;
-  api_url?: string;
+  ssh_target?: string;
 };
 
 type Job = {
@@ -30,7 +30,6 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [track, setTrack] = useState<Track>('knowledge');
   const [orgId, setOrgId] = useState('');
-  const [mode, setMode] = useState('auto');
   const [upload, setUpload] = useState(true);
   const [skipMineru, setSkipMineru] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
@@ -103,7 +102,6 @@ export default function App() {
     const body = new FormData();
     body.append('file', file);
     body.append('track', track);
-    body.append('mode', mode);
     body.append('upload', String(upload));
     body.append('skip_mineru', String(skipMineru));
     if (orgId.trim()) body.append('org_id', orgId.trim());
@@ -148,7 +146,7 @@ export default function App() {
     <div className="app">
       <h1 className="brand">userbank-local</h1>
       <p className="lead">
-        Laptop ingest: parse → embed on local RAG → HTTP/rsync to production. Knowledge = PDF/papers;
+        Laptop ingest: parse → embed on local RAG → rsync/SSH to production. Knowledge = PDF/papers;
         Survey = Excel/Word/jsonl. Embeddings are computed here, not on the server.
       </p>
 
@@ -161,10 +159,10 @@ export default function App() {
         </div>
         <p className="muted" style={{ marginTop: '0.5rem' }}>
           API <code>{API}</code>
-          {health?.api_url ? (
+          {health?.ssh_target ? (
             <>
               {' '}
-              · target <code>{health.api_url}</code>
+              · SSH <code>{health.ssh_target}</code>
             </>
           ) : null}
         </p>
@@ -211,14 +209,6 @@ export default function App() {
           <label>
             Org ID{' '}
             <input type="text" value={orgId} onChange={(e) => setOrgId(e.target.value)} />
-          </label>
-          <label>
-            Upload mode{' '}
-            <select value={mode} onChange={(e) => setMode(e.target.value)}>
-              <option value="auto">auto</option>
-              <option value="http">http</option>
-              <option value="rsync">rsync</option>
-            </select>
           </label>
           <label>
             <input type="checkbox" checked={upload} onChange={(e) => setUpload(e.target.checked)} />{' '}

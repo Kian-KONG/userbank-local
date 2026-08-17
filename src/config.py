@@ -13,25 +13,24 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Prefer OpenAI-compatible local embed (8756). If empty, fall back to userbank-rag.
-    embed_base_url: str = "http://127.0.0.1:8756/v1"
+    # Same contract as userbank-rag / userbank-api import (0.6B Q8_0, dim 1024).
+    # Empty embed_base_url → userbank-rag sidecar. Do not point this at DeepRead 8B.
+    embed_base_url: str = ""
     embed_api_key: str = "local"
-    embedding_model: str = "qwen3-embedding-8b"
-    vector_store_dimension: int = 4096
+    embedding_model: str = "qwen3-embedding:0.6b"
+    vector_store_dimension: int = 1024
 
     # Legacy userbank-rag sidecar (optional)
     rag_service_url: str = "http://127.0.0.1:8760"
     rag_internal_secret: str = ""
 
-    userbank_api_url: str = "http://127.0.0.1:3000"
     survey_org_id: str = "local-dev-eb"
-    survey_import_secret: str = ""
 
     ssh_target: str = ""
     import_staging_dir: str = "/data/import-staging"
-    upload_rsync_min_bytes: int = 52_428_800
-    upload_batch_size: int = 500
-    upload_http_retries: int = 3
+    remote_import_cmd: str = (
+        "docker exec userbank-prod-app-1 node dist/scripts/import-staging-bundle.js --job ${JOB_ID}"
+    )
 
     mineru_dir: str = ""
     deepread_dir: str = ""
@@ -41,7 +40,9 @@ class Settings(BaseSettings):
     mineru_effort: str = "high"
     mineru_api_url: str = "http://127.0.0.1:8757"
     mineru_model_source: str = "local"
-    mineru_page_chunk_size: int = 50
+    mineru_page_chunk_size: int = 128
+    mineru_formula: bool = True
+    mineru_table: bool = True
     mineru_task_timeout_seconds: float = 7200
 
     ub_local_host: str = "127.0.0.1"
