@@ -6,7 +6,6 @@ type Health = {
   ok: boolean;
   rag?: { ok?: boolean };
   mineru?: { ok?: boolean; path?: string };
-  deepread?: { ok?: boolean; path?: string };
   ssh_configured?: boolean;
   org_id?: string;
   ssh_target?: string;
@@ -129,9 +128,6 @@ export default function App() {
         </span>
         <span className={`pill ${health.mineru?.ok ? '' : 'bad'}`}>
           MinerU {health.mineru?.ok ? 'ok' : 'missing'}
-        </span>
-        <span className={`pill ${health.deepread?.ok ? '' : 'bad'}`}>
-          DeepRead {health.deepread?.ok ? 'ok' : 'missing'}
         </span>
         <span className={`pill ${health.ssh_configured ? '' : 'bad'}`}>
           SSH {health.ssh_configured ? 'set' : 'unset'}

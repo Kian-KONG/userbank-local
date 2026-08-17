@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import get_settings
-from .orchestrate import check_deepread, check_mineru, parse_document
+from .orchestrate import check_mineru, parse_document
 from .pipeline import ensure_output_subdir, export_knowledge_bundle, upload_bundle
 from .rag import rag_ready
 
@@ -276,7 +276,6 @@ async def health_payload() -> dict[str, Any]:
         "port": s.ub_local_port,
         "rag": await rag_ready(),
         "mineru": check_mineru(),
-        "deepread": check_deepread(),
         "ssh_configured": bool(s.ssh_target.strip()),
         "org_id": s.survey_org_id,
         "ssh_target": s.ssh_target.strip(),

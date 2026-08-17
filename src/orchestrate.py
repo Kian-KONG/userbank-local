@@ -1,22 +1,17 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 from .config import get_settings, path_exists
+from .markdown_corpus import write_corpus
 
 HTTP_CLIENT_BACKENDS = {"vlm-http-client", "hybrid-http-client"}
 
 
 def check_mineru() -> dict:
     p = get_settings().mineru_path()
-    return {"ok": path_exists(p), "path": str(p)}
-
-
-def check_deepread() -> dict:
-    p = get_settings().deepread_path()
     return {"ok": path_exists(p), "path": str(p)}
 
 
@@ -27,7 +22,7 @@ def parse_document(
     formula: bool | None = None,
     table: bool | None = None,
 ) -> Path:
-    """PDF → MinerU markdown → DeepRead corpus (all local)."""
+    """PDF → MinerU markdown → local corpus JSON."""
     work = work.expanduser().resolve()
     work.mkdir(parents=True, exist_ok=True)
     input_path = input_path.expanduser().resolve()
@@ -39,7 +34,7 @@ def parse_document(
         return dest
 
     if name.endswith((".md", ".markdown", ".txt")):
-        return _deepread_parse_markdown(input_path, work)
+        return write_corpus(input_path, work)
 
     if name.endswith(".json"):
         dest = work / "doc_corpus.json"
@@ -57,7 +52,7 @@ def parse_document(
     md_path = _mineru_pdf_to_markdown(
         input_path, work / "mineru_out", formula=formula, table=table
     )
-    return _deepread_parse_markdown(md_path, work)
+    return write_corpus(md_path, work)
 
 
 def _mineru_env() -> dict[str, str]:
@@ -262,48 +257,6 @@ def _merge_chunk_markdown(
     return dest
 
 
-def _deepread_parse_markdown(md_path: Path, work: Path) -> Path:
-    s = get_settings()
-    deepread_root = s.deepread_path()
-    if not path_exists(deepread_root):
-        raise RuntimeError(f"DeepRead not found at {deepread_root}")
-
-    md_path = md_path.expanduser().resolve()
-    out = (work / "deepread_out").resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    basename = "doc"
-    py = s.resolved_deepread_python()
-    deepread_py = deepread_root / "deepread.py"
-    cmd = [
-        py,
-        str(deepread_py),
-        "parse",
-        str(md_path),
-        "-o",
-        str(out),
-        "--name",
-        basename,
-    ]
-    print(f"==> DeepRead: {' '.join(cmd)}")
-    env = os.environ.copy()
-    env.setdefault("HF_HUB_OFFLINE", "1")
-    env.setdefault("TRANSFORMERS_OFFLINE", "1")
-    proc = subprocess.run(cmd, cwd=str(deepread_root), env=env, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(f"DeepRead parse failed with exit code {proc.returncode}")
-
-    found = find_corpus(out)
-    if found is None:
-        raise RuntimeError(f"DeepRead produced no corpus under {out}")
-
-    dest = work / "doc_corpus.json"
-    shutil.copyfile(found, dest)
-    md_copy = work / "doc.md"
-    shutil.copyfile(md_path, md_copy)
-    print(f"==> Corpus: {dest}")
-    return dest
-
-
 def find_markdown(directory: Path) -> Path | None:
     preferred: list[Path] = []
     others: list[Path] = []
@@ -329,24 +282,3 @@ def find_markdown(directory: Path) -> Path | None:
     if others:
         return sorted(others, key=lambda p: p.stat().st_mtime, reverse=True)[0]
     return None
-
-
-def find_corpus(directory: Path) -> Path | None:
-    for path in directory.rglob("*.json"):
-        if "corpus" in path.name:
-            return path
-    return None
-
-
-def markdown_to_corpus(filename: str, text: str) -> dict:
-    paragraphs = [{"content": p.strip()} for p in text.split("\n\n") if p.strip()]
-    return {
-        "filename": filename,
-        "nodes": [
-            {
-                "id": "root",
-                "title": filename,
-                "paragraphs": paragraphs,
-            }
-        ],
-    }

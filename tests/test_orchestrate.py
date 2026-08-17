@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from src.orchestrate import (
@@ -55,16 +56,12 @@ def test_mineru_client_cmd_keeps_tables_when_formula_disabled(tmp_path: Path) ->
 def test_parse_document_resolves_relative_work(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "doc.md"
-    src.write_text("hello\n\nworld\n", encoding="utf-8")
+    src.write_text("# Hello\n\nworld\n", encoding="utf-8")
 
-    def fake_deepread(md_path: Path, work: Path) -> Path:
-        assert work.is_absolute()
-        assert md_path.is_absolute()
-        dest = work / "doc_corpus.json"
-        dest.write_text("{}", encoding="utf-8")
-        return dest
-
-    monkeypatch.setattr("src.orchestrate._deepread_parse_markdown", fake_deepread)
     result = parse_document(Path("doc.md"), Path("output/brg-2024/parse"))
     assert result.is_absolute()
-    assert result == (tmp_path / "output/brg-2024/parse/doc_corpus.json").resolve()
+    dest = (tmp_path / "output/brg-2024/parse/doc_corpus.json").resolve()
+    assert result == dest
+    corpus = json.loads(dest.read_text(encoding="utf-8"))
+    assert corpus["nodes"][0]["title"] == "Hello"
+    assert corpus["nodes"][0]["paragraphs"] == ["world"]

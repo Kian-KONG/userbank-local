@@ -2,8 +2,8 @@
 
 | | Local (`userbank-local`) | Production |
 |--|--------------------------|------------|
-| Repos | + MinerU + DeepRead | api + web + **rag** (runtime) |
-| Knowledge track | PDF / papers → MinerU → DeepRead | Text + PDF → Qwen vision |
+| Repos | + MinerU | api + web + **rag** (runtime) |
+| Knowledge track | PDF / papers → MinerU → local corpus | Text + PDF → Qwen vision |
 | Image / PPT track | PDF / PPTX → Plus per page → Max outline | — |
 | Survey track | Excel / Word / `chunks.jsonl.gz` | rsync staging import |
 | Embed | **Always on laptop** via userbank-rag 0.6B Q8_0 (dim 1024) | Import does **not** re-embed |
@@ -11,11 +11,11 @@
 | Push to prod | SSH rsync pre-embedded bundle → server import | api staging importer |
 
 ```
-Knowledge: PDF → MinerU → DeepRead → embed (laptop) → upload
+Knowledge: PDF → MinerU → local corpus → embed (laptop) → upload
 Image/PPT: PDF/PPTX → page PNG → Plus (1 image) → Max outline → embed → upload
 Survey:    xlsx/docx/jsonl → chunks → embed (laptop) → upload
 ```
 
 Progress: React polls `GET /jobs/:id` (`phase`: parse|embed|upload, `progress` 0–100).
 
-Env: copy `.env.example`. Never put MinerU/DeepRead into `prep-single-host` / `deploy-single-host`. Control plane is Python FastAPI (`make serve`); UI remains React in `web/`.
+Env: copy `.env.example`. Never put MinerU into `prep-single-host` / `deploy-single-host`. Control plane is Python FastAPI (`make serve`); UI remains React in `web/`.

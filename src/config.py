@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     )
 
     # Same contract as userbank-rag / userbank-api import (0.6B Q8_0, dim 1024).
-    # Empty embed_base_url → userbank-rag sidecar. Do not point this at DeepRead 8B.
+    # Empty embed_base_url → userbank-rag sidecar. Do not point this at an 8B embed server.
     embed_base_url: str = ""
     embed_api_key: str = "local"
     embedding_model: str = "qwen3-embedding:0.6b"
@@ -33,9 +33,7 @@ class Settings(BaseSettings):
     )
 
     mineru_dir: str = ""
-    deepread_dir: str = ""
     mineru_python: str = ""
-    deepread_python: str = ""
     mineru_backend: str = "vlm-engine"
     mineru_effort: str = "high"
     mineru_api_url: str = "http://127.0.0.1:8757"
@@ -70,21 +68,10 @@ class Settings(BaseSettings):
             return Path(self.mineru_dir).expanduser().resolve()
         return (self.root.parent / "MinerU").resolve()
 
-    def deepread_path(self) -> Path:
-        if self.deepread_dir.strip():
-            return Path(self.deepread_dir).expanduser().resolve()
-        return (self.root.parent / "DeepRead").resolve()
-
     def resolved_mineru_python(self) -> str:
         if self.mineru_python.strip():
             return self.mineru_python
         candidate = self.mineru_path() / ".venv" / "bin" / "python"
-        return str(candidate) if candidate.exists() else "python3"
-
-    def resolved_deepread_python(self) -> str:
-        if self.deepread_python.strip():
-            return self.deepread_python
-        candidate = self.deepread_path() / ".venv" / "bin" / "python"
         return str(candidate) if candidate.exists() else "python3"
 
 
