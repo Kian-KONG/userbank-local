@@ -225,19 +225,35 @@ async def run_pipeline(
     document_id: str | None,
     filename: str | None,
 ) -> dict[str, Any]:
-    _ = track
     work = ensure_output_subdir(f"jobs/{job_id}")
     await store.mutate(job_id, lambda j: j.set_progress("parse", 10.0, "parsing"))
-    # parse is sync CPU/IO — offload lightly
-    corpus = await asyncio.to_thread(
-        parse_document, input_path, work / "parse", skip_mineru
-    )
-    await store.mutate(job_id, lambda j: j.set_progress("embed", 35.0, "export + embed"))
+    if track == "image":
+        from .image_ingest import ingest_image_document
+
+        async def on_vision(phase: str, done: int, total: int) -> None:
+            pct = 10.0 + 45.0 * (done / max(total, 1))
+            await store.mutate(
+                job_id,
+                lambda j: j.set_progress(
+                    "vision", pct, f"{phase} {done}/{total}"
+                ),
+            )
+
+        corpus = await ingest_image_document(
+            input_path, work / "parse", on_vision
+        )
+        embed_start = 60.0
+    else:
+        corpus = await asyncio.to_thread(
+            parse_document, input_path, work / "parse", skip_mineru
+        )
+        embed_start = 35.0
+    await store.mutate(job_id, lambda j: j.set_progress("embed", embed_start, "export + embed"))
     doc_id = document_id or "local-doc"
     export_dir = work / "bundle"
 
     async def on_progress(done: int, total: int) -> None:
-        pct = 35.0 + 50.0 * (done / max(total, 1))
+        pct = embed_start + (90.0 - embed_start) * (done / max(total, 1))
         await store.mutate(
             job_id,
             lambda j: j.set_progress("embed", pct, f"embedded {done}/{total}"),

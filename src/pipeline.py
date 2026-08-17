@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from .config import get_settings
-from .flatten import flatten_corpus
+from .flatten import flatten_for_export
 from .rag import rag_embed
 
 BATCH = 16
@@ -36,7 +36,7 @@ async def export_knowledge_bundle(
     s = get_settings()
     output_dir.mkdir(parents=True, exist_ok=True)
     corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
-    flat = flatten_corpus(corpus, document_id)
+    flat = flatten_for_export(corpus, document_id)
     if not flat:
         raise RuntimeError("corpus produced no embeddable paragraphs")
 
@@ -80,6 +80,7 @@ async def export_knowledge_bundle(
         "org_id": resolved_org,
         "job_id": str(uuid.uuid4()),
         "chunk_count": len(embedded_items),
+        "source_type": corpus.get("source_type") or "text",
     }
     (output_dir / "import.manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

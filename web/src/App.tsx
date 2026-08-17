@@ -23,7 +23,7 @@ type Job = {
   logs?: string[];
 };
 
-type Track = 'knowledge' | 'survey';
+type Track = 'knowledge' | 'survey' | 'image';
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -40,12 +40,16 @@ export default function App() {
   const accept =
     track === 'survey'
       ? '.xlsx,.xlsm,.docx,.jsonl,.gz,application/gzip'
-      : '.pdf,.md,.markdown,.json';
+      : track === 'image'
+        ? '.pdf,.ppt,.pptx'
+        : '.pdf,.md,.markdown,.json';
 
   const dropHint =
     track === 'survey'
       ? 'Drop Excel / Word / chunks.jsonl.gz'
-      : 'Drop PDF / MD / *_corpus.json';
+      : track === 'image'
+        ? 'Drop PDF / PPT / PPTX (single-page vision + deck outline)'
+        : 'Drop PDF / MD / *_corpus.json';
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -87,7 +91,9 @@ export default function App() {
       setError(
         track === 'survey'
           ? 'Choose an Excel / Word / chunks.jsonl(.gz) file first'
-          : 'Choose a PDF / markdown / corpus.json first',
+          : track === 'image'
+            ? 'Choose a PDF / PPT / PPTX first'
+            : 'Choose a PDF / markdown / corpus.json first',
       );
       return;
     }
@@ -177,6 +183,7 @@ export default function App() {
               }}
             >
               <option value="knowledge">Knowledge (PDF / papers)</option>
+              <option value="image">Image / PPT (vision + outline)</option>
               <option value="survey">Survey (Excel / Word / jsonl)</option>
             </select>
           </label>
