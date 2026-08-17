@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     mineru_python: str = ""
     deepread_python: str = ""
     mineru_backend: str = "vlm-engine"
+    mineru_effort: str = "high"
     mineru_api_url: str = "http://127.0.0.1:8757"
     mineru_model_source: str = "local"
     mineru_page_chunk_size: int = 50

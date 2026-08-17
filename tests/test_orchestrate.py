@@ -13,6 +13,16 @@ def test_find_markdown_prefers_nested_vlm_output(tmp_path: Path) -> None:
     assert found == md
 
 
+def test_find_markdown_prefers_hybrid_auto_output(tmp_path: Path) -> None:
+    hybrid = tmp_path / "BRG" / "hybrid_auto"
+    hybrid.mkdir(parents=True)
+    md = hybrid / "BRG.md"
+    md.write_text("# hybrid\n", encoding="utf-8")
+    (tmp_path / "ignore_origin.md").write_text("skip\n", encoding="utf-8")
+    found = find_markdown(tmp_path)
+    assert found == md
+
+
 def test_parse_document_resolves_relative_work(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "doc.md"

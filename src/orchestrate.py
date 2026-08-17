@@ -109,7 +109,8 @@ def _mineru_pdf_to_markdown(pdf_path: Path, out_dir: Path) -> Path:
     chunks = _page_chunks(page_count, s.mineru_page_chunk_size)
     print(
         f"==> MinerU: {page_count} pages, {len(chunks)} chunk(s) "
-        f"(size={s.mineru_page_chunk_size}, backend={s.mineru_backend})"
+        f"(size={s.mineru_page_chunk_size}, backend={s.mineru_backend}"
+        f"{', effort=' + s.mineru_effort if s.mineru_backend.startswith('hybrid') else ''})"
     )
 
     md_parts: list[tuple[int, int, Path]] = []
@@ -168,6 +169,11 @@ def _run_mineru_chunk(
         "-t",
         "true",
     ]
+    if backend.startswith("hybrid"):
+        effort = (s.mineru_effort or "high").strip()
+        cmd.extend(["--effort", effort])
+        if effort == "high":
+            cmd.extend(["--image-analysis", "true"])
     if api_url:
         cmd.extend(["--api-url", api_url])
     elif backend in HTTP_CLIENT_BACKENDS:
@@ -254,12 +260,14 @@ def find_markdown(directory: Path) -> Path | None:
         if path.name.endswith("_origin.md"):
             continue
         normalized = str(path).replace("\\", "/")
-        if "/vlm/" in normalized or path.parent.name in {
-            "vlm",
-            "hybrid",
-            "pipeline",
-            "auto",
-        }:
+        parent = path.parent.name
+        if (
+            "/vlm/" in normalized
+            or "/hybrid_" in normalized
+            or "/hybrid/" in normalized
+            or parent in {"vlm", "hybrid", "pipeline", "auto"}
+            or parent.startswith("hybrid_")
+        ):
             preferred.append(path)
         else:
             others.append(path)
