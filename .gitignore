@@ -16,3 +16,6 @@ web/dist/
 .DS_Store
 *.log
 /target
+*.pdf
+*.ppt
+*.pptx
