@@ -6,11 +6,14 @@ import re
 import shlex
 import subprocess
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 SSH_OPTS = ["-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=10"]
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+STAGING_JOB_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[A-Za-z0-9._-]+_[A-Za-z0-9]{6,12}$")
 
 # Keep in lockstep with scripts/rsync-upload-bundle.sh
 VERIFY_PY = """\
@@ -89,6 +92,39 @@ def sanitize_job_id(job_id: str) -> str:
     if not JOB_ID_RE.match(cleaned):
         raise RuntimeError(f"invalid job id: {job_id!r}")
     return cleaned
+
+
+def _slug_token(value: str, fallback: str = "doc") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._]+", "-", value.strip())
+    cleaned = re.sub(r"-{2,}", "-", cleaned).strip("-._")
+    return (cleaned or fallback)[:48]
+
+
+def _short_suffix(job_id: str | None) -> str:
+    raw = (job_id or "").strip()
+    hexish = raw.replace("-", "")
+    if hexish and re.fullmatch(r"[A-Za-z0-9]+", hexish):
+        return hexish[:8]
+    if raw and JOB_ID_RE.match(raw):
+        return raw[:8]
+    return uuid4().hex[:8]
+
+
+def build_staging_job_id(
+    *,
+    document_id: str | None = None,
+    filename: str | None = None,
+    job_id: str | None = None,
+    when: date | None = None,
+) -> str:
+    raw_job = (job_id or "").strip()
+    if raw_job and STAGING_JOB_RE.match(raw_job):
+        return sanitize_job_id(raw_job)
+    day = (when or date.today()).isoformat()
+    doc = _slug_token(document_id or "")
+    if doc == "doc" and filename:
+        doc = _slug_token(Path(filename).stem, "doc")
+    return sanitize_job_id(f"{day}_{doc}_{_short_suffix(raw_job or None)}")
 
 
 def resolve_import_cmd(template: str, job_id: str) -> str:
@@ -183,7 +219,17 @@ def rsync_upload_bundle(
             encoding="utf-8",
         )
 
-    resolved_job = sanitize_job_id(str(job_id or manifest.get("job_id") or bundle_dir.name))
+    resolved_job = build_staging_job_id(
+        document_id=str(manifest.get("document_id") or "") or None,
+        filename=str(manifest.get("filename") or "") or None,
+        job_id=str(job_id or manifest.get("job_id") or "") or None,
+    )
+    if manifest.get("job_id") != resolved_job:
+        manifest["job_id"] = resolved_job
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     staging = s.import_staging_dir.rstrip("/") or "/data/import-staging"
     remote_dir = f"{staging}/{resolved_job}"
     check_remote_disk(target, staging, bundle_size_bytes(bundle_dir))

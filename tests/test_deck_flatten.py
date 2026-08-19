@@ -84,3 +84,15 @@ def test_convert_office_pdf_passthrough(tmp_path: Path):
     pdf = tmp_path / "deck.pdf"
     pdf.write_bytes(b"%PDF-1.4\n")
     assert convert_office_to_pdf(pdf, tmp_path / "office") == pdf
+
+
+def test_vision_checkpoint_roundtrip(tmp_path: Path):
+    from src.image_ingest import _load_vision_checkpoint, _save_vision_checkpoint
+
+    _save_vision_checkpoint(
+        tmp_path,
+        [{"page_number": 2, "title": "Market", "description": "Heat pumps"}],
+    )
+    cached = _load_vision_checkpoint(tmp_path)
+    assert cached[2]["description"] == "Heat pumps"
+    assert _load_vision_checkpoint(tmp_path / "missing") == {}

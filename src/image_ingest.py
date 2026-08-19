@@ -101,6 +101,38 @@ def _page_number_from_name(path: Path) -> int:
     return int(digits) if digits else 0
 
 
+def _vision_checkpoint_path(work: Path) -> Path:
+    return work / "pages_vision.json"
+
+
+def _load_vision_checkpoint(work: Path) -> dict[int, dict[str, Any]]:
+    path = _vision_checkpoint_path(work)
+    if not path.is_file():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    pages = raw.get("pages") if isinstance(raw, dict) else raw
+    out: dict[int, dict[str, Any]] = {}
+    if not isinstance(pages, list):
+        return out
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        try:
+            number = int(page.get("page_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and str(page.get("description") or "").strip():
+            out[number] = page
+    return out
+
+
+def _save_vision_checkpoint(work: Path, pages: list[dict[str, Any]]) -> None:
+    _vision_checkpoint_path(work).write_text(
+        json.dumps({"pages": pages}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 async def ingest_image_document(
     input_path: Path,
     work: Path,
@@ -112,25 +144,42 @@ async def ingest_image_document(
     input_path = input_path.expanduser().resolve()
     native_titles = extract_pptx_slide_titles(input_path)
     pdf_path = convert_office_to_pdf(input_path, work / "office")
-    pngs = render_pdf_pages(pdf_path, work / "pages")
+    page_dir = work / "pages"
+    pngs = sorted(page_dir.glob("page_*.png"))
+    if not pngs:
+        pngs = render_pdf_pages(pdf_path, page_dir)
 
+    cached = _load_vision_checkpoint(work)
     pages: list[dict[str, Any]] = []
     total = len(pngs)
     for index, png in enumerate(pngs, start=1):
         page_number = _page_number_from_name(png) or index
-        image_base64 = base64.b64encode(png.read_bytes()).decode("ascii")
-        descriptions = await rag_describe_pages(
-            [{"page_number": page_number, "image_base64": image_base64}]
-        )
-        description = descriptions[0]
-        title = native_titles.get(page_number) or first_title_line(description)
-        pages.append(
-            {
-                "page_number": page_number,
-                "title": title,
-                "description": description,
-            }
-        )
+        existing = cached.get(page_number)
+        if existing is not None:
+            pages.append(
+                {
+                    "page_number": page_number,
+                    "title": existing.get("title") or native_titles.get(page_number) or "",
+                    "description": existing["description"],
+                }
+            )
+            print(f"==> skip vision page {page_number}/{total}")
+        else:
+            image_base64 = base64.b64encode(png.read_bytes()).decode("ascii")
+            descriptions = await rag_describe_pages(
+                [{"page_number": page_number, "image_base64": image_base64}]
+            )
+            description = descriptions[0]
+            title = native_titles.get(page_number) or first_title_line(description)
+            pages.append(
+                {
+                    "page_number": page_number,
+                    "title": title,
+                    "description": description,
+                }
+            )
+            print(f"==> vision page {page_number}/{total}")
+        _save_vision_checkpoint(work, pages)
         if on_progress is not None:
             maybe = on_progress("vision", index, total)
             if hasattr(maybe, "__await__"):

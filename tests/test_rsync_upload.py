@@ -2,6 +2,7 @@ import gzip
 import hashlib
 import json
 import subprocess
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ import pytest
 
 from src.rsync_upload import (
     attach_checksums,
+    build_staging_job_id,
     resolve_import_cmd,
     rsync_upload_bundle,
     sanitize_job_id,
@@ -60,6 +62,36 @@ def test_sanitize_job_id_rejects_shell_meta():
         sanitize_job_id("foo; rm -rf /")
 
 
+def test_build_staging_job_id_uses_date_document_and_short_suffix():
+    name = build_staging_job_id(
+        document_id="delta-2024-mfh",
+        job_id="b8403966-a7ab-4d4d-a780-f6875ea8c442",
+        when=date(2026, 8, 19),
+    )
+    assert name == "2026-08-19_delta-2024-mfh_b8403966"
+
+
+def test_build_staging_job_id_sanitizes_filename_when_document_id_missing():
+    name = build_staging_job_id(
+        filename="MKX InfoCall (DE).pdf",
+        job_id="4c9987a4-0ccb-449b-a014-9fb1a358bf1f",
+        when=date(2026, 8, 19),
+    )
+    assert name == "2026-08-19_MKX-InfoCall-DE_4c9987a4"
+
+
+def test_build_staging_job_id_keeps_existing_staging_name():
+    existing = "2026-08-19_delta-2024-mfh_b8403966"
+    assert (
+        build_staging_job_id(
+            document_id="other-doc",
+            job_id=existing,
+            when=date(2026, 8, 20),
+        )
+        == existing
+    )
+
+
 def test_resolve_import_cmd_substitutes_job_id():
     cmd = resolve_import_cmd(
         "docker exec userbank-prod-app-1 node dist/scripts/import-staging-bundle.js --job ${JOB_ID}",
@@ -72,7 +104,12 @@ def test_rsync_upload_bundle_runs_ssh_rsync_verify_import(tmp_path: Path, monkey
     _write_gz(tmp_path / "chunks.embedded.jsonl.gz", [{"id": "a", "text": "t", "embedding": [0.1]}])
     (tmp_path / "doc_corpus.json").write_text("{}\n", encoding="utf-8")
     manifest = attach_checksums(
-        {"job_id": "job-9", "org_id": "org-1", "filename": "doc.json"},
+        {
+            "job_id": "b8403966-a7ab-4d4d-a780-f6875ea8c442",
+            "document_id": "delta-2024-mfh",
+            "org_id": "org-1",
+            "filename": "doc.json",
+        },
         tmp_path,
     )
     (tmp_path / "import.manifest.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
@@ -85,19 +122,25 @@ def test_rsync_upload_bundle_runs_ssh_rsync_verify_import(tmp_path: Path, monkey
         stdout = "999999\n" if capture else ""
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
+    class _Today(date):
+        @classmethod
+        def today(cls) -> date:
+            return date(2026, 8, 19)
+
     monkeypatch.setattr("src.config.get_settings", lambda: _settings())
     monkeypatch.setattr("src.rsync_upload.run_cmd", fake_run)
+    monkeypatch.setattr("src.rsync_upload.date", _Today)
 
-    result = rsync_upload_bundle(tmp_path, job_id="job-9")
+    result = rsync_upload_bundle(tmp_path, job_id="b8403966-a7ab-4d4d-a780-f6875ea8c442")
     assert result["mode"] == "rsync"
-    assert result["job_id"] == "job-9"
-    assert result["remote_dir"] == "/data/import-staging/job-9"
+    assert result["job_id"] == "2026-08-19_delta-2024-mfh_b8403966"
+    assert result["remote_dir"] == "/data/import-staging/2026-08-19_delta-2024-mfh_b8403966"
 
     rsync = next(c for c in calls if c[0] == "rsync")
     assert "-z" not in rsync
     assert "--partial" in rsync
     assert "--append-verify" in rsync
-    assert rsync[-1] == "deploy@ecs-host:/data/import-staging/job-9/"
+    assert rsync[-1] == "deploy@ecs-host:/data/import-staging/2026-08-19_delta-2024-mfh_b8403966/"
     assert any(c[0] == "ssh" and "mkdir -p" in c[-1] for c in calls)
     assert any(c[-2:] == ["bash", "-s"] for c in calls)
     assert any(c[0] == "ssh" and "import-staging-bundle.js" in c[-1] for c in calls)
