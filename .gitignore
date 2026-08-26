@@ -16,3 +16,5 @@ web/dist/
 .DS_Store
 *.log
 /target
+HC_APAC
+HC_EMEA
