@@ -7,9 +7,12 @@ from pathlib import Path
 import uvicorn
 
 from .config import get_settings
+from .excel_ingest import parse_tabular_input
+from .image_ingest import ingest_image_document
 from .orchestrate import parse_document
 from .pipeline import ensure_output_subdir, export_knowledge_bundle, upload_bundle
 from .api import create_app
+from .routing import file_kind
 
 
 def main() -> None:
@@ -48,7 +51,13 @@ def main() -> None:
 
     if args.command == "parse":
         work = args.out or ensure_output_subdir("cli-parse")
-        corpus = parse_document(args.input, work, args.skip_mineru)
+        kind = file_kind(args.input)
+        if kind == "deck":
+            corpus = asyncio.run(ingest_image_document(args.input, Path(work)))
+        elif kind == "tabular":
+            corpus = parse_tabular_input(args.input, Path(work))
+        else:
+            corpus = parse_document(args.input, work, args.skip_mineru)
         print(corpus)
         return
 
