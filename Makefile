@@ -1,11 +1,15 @@
+PIP_INDEX := https://pypi.tuna.tsinghua.edu.cn/simple
+NPM_REGISTRY := https://registry.npmmirror.com
+
 .PHONY: install serve check web
 
 install:
 	@PY=$$(command -v python3.12 || command -v python3.11 || command -v python3); \
 	$$PY -m venv .venv
-	.venv/bin/pip install -U pip -i https://pypi.tuna.tsinghua.edu.cn/simple
-	.venv/bin/pip install -e ".[dev]" -i https://pypi.tuna.tsinghua.edu.cn/simple
-	cd web && npm install
+	@printf '[global]\nindex-url = $(PIP_INDEX)\ntrusted-host = pypi.tuna.tsinghua.edu.cn\n' > .venv/pip.conf
+	.venv/bin/pip install -U pip -i $(PIP_INDEX)
+	.venv/bin/pip install -e ".[dev]" -i $(PIP_INDEX)
+	cd web && npm install --registry=$(NPM_REGISTRY)
 
 serve:
 	@test -d .venv || $(MAKE) install
@@ -14,6 +18,7 @@ serve:
 check:
 	@test -d .venv || $(MAKE) install
 	.venv/bin/python -c "from src.api import create_app; create_app(); print('ok')"
+	.venv/bin/python -m pytest tests -q
 
 web:
 	cd web && npm run dev

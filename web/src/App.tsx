@@ -6,7 +6,7 @@ type Health = {
   ok: boolean;
   rag?: { ok?: boolean };
   mineru?: { ok?: boolean; path?: string };
-  deepread?: { ok?: boolean; path?: string };
+  soffice?: { ok?: boolean; path?: string };
   ssh_configured?: boolean;
   org_id?: string;
   api_url?: string;
@@ -40,12 +40,12 @@ export default function App() {
   const accept =
     track === 'survey'
       ? '.xlsx,.xlsm,.docx,.jsonl,.gz,application/gzip'
-      : '.pdf,.md,.markdown,.json';
+      : '.pdf,.ppt,.pptx,.pptm,.doc,.docx,.xlsx,.xlsm,.md,.markdown,.json';
 
   const dropHint =
     track === 'survey'
       ? 'Drop Excel / Word / chunks.jsonl.gz'
-      : 'Drop PDF / MD / *_corpus.json';
+      : 'Drop PDF / PPT / Word / Excel / MD / *_corpus.json';
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -87,7 +87,7 @@ export default function App() {
       setError(
         track === 'survey'
           ? 'Choose an Excel / Word / chunks.jsonl(.gz) file first'
-          : 'Choose a PDF / markdown / corpus.json first',
+          : 'Choose a PDF / PPT / Word / Excel / markdown / corpus.json first',
       );
       return;
     }
@@ -126,8 +126,8 @@ export default function App() {
         <span className={`pill ${health.mineru?.ok ? '' : 'bad'}`}>
           MinerU {health.mineru?.ok ? 'ok' : 'missing'}
         </span>
-        <span className={`pill ${health.deepread?.ok ? '' : 'bad'}`}>
-          DeepRead {health.deepread?.ok ? 'ok' : 'missing'}
+        <span className={`pill ${health.soffice?.ok ? '' : 'bad'}`}>
+          LibreOffice {health.soffice?.ok ? 'ok' : 'missing'}
         </span>
         <span className={`pill ${health.ssh_configured ? '' : 'bad'}`}>
           SSH {health.ssh_configured ? 'set' : 'unset'}
@@ -142,8 +142,8 @@ export default function App() {
     <div className="app">
       <h1 className="brand">userbank-local</h1>
       <p className="lead">
-        Laptop ingest: parse → embed on local RAG → HTTP/rsync to production. Knowledge = PDF/papers;
-        Survey = Excel/Word/jsonl. Embeddings are computed here, not on the server.
+        Laptop ingest by file type: PDF/Word → MinerU, PPT → Qwen vision, Excel → table IR.
+        Embeddings are computed here, not on the server.
       </p>
 
       <section className="panel">
@@ -176,7 +176,7 @@ export default function App() {
                 setFile(null);
               }}
             >
-              <option value="knowledge">Knowledge (PDF / papers)</option>
+              <option value="knowledge">Knowledge (PDF / PPT / Word / Excel)</option>
               <option value="survey">Survey (Excel / Word / jsonl)</option>
             </select>
           </label>
