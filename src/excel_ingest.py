@@ -16,6 +16,10 @@ QUESTION_HINTS = re.compile(r"(question|frage|item|statement|item.?text)", re.I)
 Q_CODE = re.compile(r"^q\d", re.I)
 PERSONA_KEYS = {"persona", "persona_name"}
 PERSONA_ID_KEYS = {"persona_id", "personaid"}
+CLUSTER_IDS = {"1", "2", "3", "4"}
+PLACEHOLDER_CELL = re.compile(r"^\$\{.+\}$")
+HEATMAP_SHEET = re.compile(r"heat\s*map", re.I)
+MEASURE_CLUSTER = re.compile(r"^(?P<country>.+?)\s+cluster\s+(?P<cluster>[1-4])$", re.I)
 
 
 @dataclass
@@ -36,10 +40,12 @@ def parse_tabular_input(
 ) -> Path:
     work.mkdir(parents=True, exist_ok=True)
     name = input_path.name.lower()
+    long_rows: list[dict[str, Any]] = []
+    catalog: list[dict[str, Any]] = []
     if name.endswith(".jsonl.gz") or name.endswith(".jsonl"):
         chunks = _load_jsonl(input_path)
     elif input_path.suffix.lower() in {".xlsx", ".xlsm"}:
-        chunks = excel_to_chunks(input_path, track=track)
+        chunks, long_rows, catalog = parse_excel_workbook(input_path, track=track)
     else:
         raise RuntimeError(f"unsupported tabular input: {input_path.name}")
     if not chunks:
@@ -51,17 +57,40 @@ def parse_tabular_input(
     }
     dest = work / "doc_corpus.json"
     dest.write_text(json.dumps(corpus, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if long_rows:
+        _write_jsonl_gz(work / "crosstab_long.jsonl.gz", long_rows)
+        (work / "question_catalog.json").write_text(
+            json.dumps(catalog, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     return dest
 
 
 def excel_to_chunks(path: Path, track: str = "knowledge") -> list[dict[str, Any]]:
+    chunks, _long_rows, _catalog = parse_excel_workbook(path, track=track)
+    return chunks
+
+
+def parse_excel_workbook(
+    path: Path, track: str = "knowledge"
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     tables = load_workbook_tables(path)
     chunks: list[dict[str, Any]] = []
+    long_rows: list[dict[str, Any]] = []
     for table in tables:
+        if _skip_duplicate_crosstab_sheet(table.sheet):
+            continue
         table.kind = classify_table(table.headers, table.rows)
         table.column_map = maybe_column_map(table)
-        chunks.extend(table_to_chunks(table, path.name, track=track))
-    return chunks
+        if table.kind == "crosstab":
+            records = _crosstab_records(table)
+            chunks.extend(_crosstab_chunks_from_records(table, records, path.name))
+            long_rows.extend(_unpivot_crosstab_records(records, table.sheet, path.name))
+        else:
+            chunks.extend(table_to_chunks(table, path.name, track=track))
+    catalog = build_question_catalog(long_rows)
+    chunks.extend(catalog_chunks(catalog, path.name))
+    return chunks, long_rows, catalog
 
 
 def load_workbook_tables(path: Path) -> list[TableBlock]:
@@ -92,6 +121,8 @@ def classify_table(headers: list[str], rows: list[tuple[int, list[Any]]]) -> She
     if filled_max <= 1 and len(headers) <= 1:
         return "notes"
 
+    if _is_crosstab_headers(headers):
+        return "crosstab"
     if _looks_like_codebook(headers):
         return "codebook"
     if _looks_like_kv_form(headers, rows):
@@ -167,6 +198,8 @@ def table_to_chunks(
 
     if table.kind == "codebook":
         return _codebook_chunks(table, headers, source_file)
+    if table.kind == "crosstab":
+        return _crosstab_chunks(table, source_file)
 
     chunks: list[dict[str, Any]] = []
     for excel_row, values in table.rows:
@@ -325,6 +358,8 @@ def _skip_title_rows(grid: list[list[Any]], start: int) -> int:
 
 
 def _header_band_end(grid: list[list[Any]], start: int) -> int:
+    if start + 1 < len(grid) and _is_cluster_id_row(grid[start + 1]):
+        return start + 2
     end = start + 1
     while end < len(grid) and _looks_like_header(grid[end]) and not _is_empty_row(grid[end]):
         if _mostly_numeric(grid[end]):
@@ -338,6 +373,8 @@ def _header_band_end(grid: list[list[Any]], start: int) -> int:
 def _join_headers(header_rows: list[list[Any]]) -> list[str]:
     if not header_rows:
         return []
+    if len(header_rows) >= 2 and _is_cluster_id_row(header_rows[1]):
+        return _crosstab_headers(header_rows[0], header_rows[1])
     width = max(len(row) for row in header_rows)
     headers: list[str] = []
     for col in range(width):
@@ -350,6 +387,384 @@ def _join_headers(header_rows: list[list[Any]]) -> list[str]:
     while len(headers) > 1 and headers[-1].startswith("col_"):
         headers.pop()
     return headers
+
+
+def _skip_duplicate_crosstab_sheet(sheet: str) -> bool:
+    return bool(HEATMAP_SHEET.search(sheet or ""))
+
+
+def _is_cluster_id_row(row: list[Any]) -> bool:
+    filled = [_cell_str(v) for v in row if _cell_str(v)]
+    if len(filled) < 8:
+        return False
+    ids: list[str] = []
+    for value in filled:
+        if not _is_number(value):
+            return False
+        number = float(value.replace(",", ""))
+        if number not in {1.0, 2.0, 3.0, 4.0}:
+            return False
+        ids.append(str(int(number)))
+    return ids[:4] == ["1", "2", "3", "4"] and ids[4:8] == ["1", "2", "3", "4"]
+
+
+def _is_crosstab_headers(headers: list[str]) -> bool:
+    cluster_headers = [h for h in headers if " cluster " in h]
+    return len(cluster_headers) >= 8
+
+
+def _crosstab_stub_names(count: int) -> list[str]:
+    names = ["question", "option", "metric", "Overall"]
+    if count <= len(names):
+        return names[:count]
+    extra = [f"col_{index}" for index in range(len(names), count)]
+    return names + extra
+
+
+def _crosstab_headers(country_row: list[Any], cluster_row: list[Any]) -> list[str]:
+    width = max(len(country_row), len(cluster_row))
+    countries = [_cell_str(country_row[col] if col < len(country_row) else "") for col in range(width)]
+    clusters = [_cell_str(cluster_row[col] if col < len(cluster_row) else "") for col in range(width)]
+    first_measure = next(
+        (
+            col
+            for col in range(width)
+            if countries[col] or _cluster_token(clusters[col])
+        ),
+        width,
+    )
+    stub_names = _crosstab_stub_names(first_measure)
+    headers: list[str] = []
+    last_country = ""
+    last_filled = 0
+    for col in range(width):
+        if col < first_measure:
+            headers.append(stub_names[col])
+            last_filled = len(headers)
+            continue
+        if countries[col]:
+            last_country = countries[col]
+        cluster = _cluster_token(clusters[col])
+        if cluster:
+            label = f"{last_country} cluster {cluster}" if last_country else f"cluster {cluster}"
+            headers.append(label)
+            last_filled = len(headers)
+        elif countries[col]:
+            headers.append(countries[col])
+            last_filled = len(headers)
+        else:
+            headers.append(f"col_{col}")
+    return headers[:last_filled]
+
+
+def _cluster_token(value: str) -> str:
+    if not value or not _is_number(value):
+        return ""
+    number = float(value.replace(",", ""))
+    if number not in {1.0, 2.0, 3.0, 4.0}:
+        return ""
+    return str(int(number))
+
+
+def _crosstab_chunks(table: TableBlock, source_file: str) -> list[dict[str, Any]]:
+    return _crosstab_chunks_from_records(table, _crosstab_records(table), source_file)
+
+
+def _crosstab_records(table: TableBlock) -> list[dict[str, Any]]:
+    headers = table.headers
+    question_i = headers.index("question") if "question" in headers else None
+    option_i = headers.index("option") if "option" in headers else None
+    metric_i = headers.index("metric") if "metric" in headers else None
+    measure_indexes = [
+        index
+        for index, header in enumerate(headers)
+        if index not in {question_i, option_i, metric_i}
+    ]
+    records: list[dict[str, Any]] = []
+    question = ""
+    option = ""
+    for excel_row, values in table.rows:
+        padded = list(values) + [None] * max(0, len(headers) - len(values))
+        row_question = _cell_str(padded[question_i]) if question_i is not None else ""
+        row_option = _cell_str(padded[option_i]) if option_i is not None else ""
+        metric = _cell_str(padded[metric_i]) if metric_i is not None else ""
+        measures = _crosstab_measures(headers, padded, measure_indexes)
+        if option_i is None:
+            if row_question and not measures:
+                question = row_question
+                continue
+            if row_question:
+                option = row_question
+        else:
+            if row_question:
+                question = row_question
+            if row_option:
+                option = row_option
+        if _skip_crosstab_record(question, option or row_question):
+            continue
+        if not measures or _measures_all_zero(measures):
+            continue
+        if not option:
+            option = "Base n"
+        records.append(
+            {
+                "excel_row": excel_row,
+                "question": question,
+                "option": option,
+                "metric": metric,
+                "measures": measures,
+            }
+        )
+    return records
+
+
+def _crosstab_chunks_from_records(
+    table: TableBlock,
+    records: list[dict[str, Any]],
+    source_file: str,
+) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    index = 0
+    while index < len(records):
+        current = records[index]
+        paired = None
+        if index + 1 < len(records):
+            nxt = records[index + 1]
+            if (
+                _metric_kind(current["metric"]) == "value"
+                and _metric_kind(nxt["metric"]) == "percent"
+                and nxt["question"] == current["question"]
+                and nxt["option"] == current["option"]
+            ):
+                paired = nxt
+        text = _format_crosstab_chunk(table.sheet, current, paired)
+        if text:
+            meta = {
+                "excel_row": current["excel_row"],
+                "excel_sheet": table.sheet,
+                "sheet_kind": "crosstab",
+                "chunk_type": "excel_crosstab",
+                "source_file": source_file,
+                "question": current["question"],
+                "option": current["option"],
+            }
+            chunks.append(
+                _chunk(
+                    f"{table.sheet}_q_{current['excel_row']}",
+                    text,
+                    meta,
+                )
+            )
+        index += 2 if paired is not None else 1
+    return chunks
+
+
+def _unpivot_crosstab_records(
+    records: list[dict[str, Any]],
+    sheet: str,
+    source_file: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        metric = "pct" if _metric_kind(str(record.get("metric") or "")) == "percent" else "count"
+        for header, raw in record.get("measures") or []:
+            if not _is_number(raw):
+                continue
+            country, cluster = _split_measure_header(header)
+            if not country:
+                continue
+            rows.append(
+                {
+                    "source_file": source_file,
+                    "sheet": sheet,
+                    "question": record["question"],
+                    "option": record["option"],
+                    "country": country,
+                    "cluster": cluster,
+                    "metric": metric,
+                    "value": float(raw.replace(",", "")),
+                }
+            )
+    return rows
+
+
+def _split_measure_header(header: str) -> tuple[str, int | None]:
+    match = MEASURE_CLUSTER.match((header or "").strip())
+    if match:
+        return match.group("country").strip(), int(match.group("cluster"))
+    return (header or "").strip(), None
+
+
+def build_question_catalog(long_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in long_rows:
+        question = str(row.get("question") or "").strip()
+        sheet = str(row.get("sheet") or "").strip()
+        if not question:
+            continue
+        entry = grouped.setdefault(
+            (sheet, question),
+            {
+                "sheet": sheet,
+                "question": question,
+                "options": set(),
+                "countries": set(),
+                "clusters": set(),
+            },
+        )
+        option = str(row.get("option") or "").strip()
+        country = str(row.get("country") or "").strip()
+        cluster = row.get("cluster")
+        if option:
+            entry["options"].add(option)
+        if country:
+            entry["countries"].add(country)
+        if cluster is not None and str(cluster).strip() != "":
+            entry["clusters"].add(int(cluster))
+    catalog: list[dict[str, Any]] = []
+    for entry in grouped.values():
+        options = sorted(entry["options"])
+        countries = sorted(entry["countries"])
+        clusters = sorted(entry["clusters"])
+        catalog.append(
+            {
+                "sheet": entry["sheet"],
+                "question": entry["question"],
+                "options": options,
+                "countries": countries,
+                "clusters": clusters,
+                "option_count": len(options),
+            }
+        )
+    return catalog
+
+
+def catalog_chunks(catalog: list[dict[str, Any]], source_file: str) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    for index, entry in enumerate(catalog):
+        question = entry["question"]
+        options = entry.get("options") or []
+        countries = entry.get("countries") or []
+        preview = "; ".join(str(item) for item in options[:12])
+        if len(options) > 12:
+            preview += "; …"
+        text = (
+            f"Survey catalog | {source_file}\n"
+            f"Question: {question}\n"
+            f"Sheet: {entry.get('sheet')}\n"
+            f"Options ({entry.get('option_count') or len(options)}): {preview}\n"
+            f"Countries: {', '.join(str(item) for item in countries)}\n"
+            "Look up counts (metric=count) and column percentages (metric=pct) "
+            "by country and cluster 1-4 in the survey table."
+        )
+        chunks.append(
+            _chunk(
+                f"catalog_{index}_{entry.get('sheet')}",
+                text,
+                {
+                    "excel_sheet": entry.get("sheet"),
+                    "sheet_kind": "crosstab",
+                    "chunk_type": "excel_catalog",
+                    "source_file": source_file,
+                    "question": question,
+                },
+            )
+        )
+    return chunks
+
+
+def _skip_crosstab_record(question: str, option: str) -> bool:
+    blobs = (question, option)
+    if any(PLACEHOLDER_CELL.match(text) for text in blobs):
+        return True
+    if question.strip().lower() == "hidden for country":
+        return True
+    return False
+
+
+def _crosstab_measures(
+    headers: list[str],
+    values: list[Any],
+    measure_indexes: list[int],
+) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for index in measure_indexes:
+        text = _cell_str(values[index] if index < len(values) else "")
+        if not text:
+            continue
+        out.append((headers[index], text))
+    return out
+
+
+def _measures_all_zero(measures: list[tuple[str, str]]) -> bool:
+    if not measures:
+        return True
+    for _header, raw in measures:
+        if not _is_number(raw):
+            return False
+        if float(raw.replace(",", "")) != 0:
+            return False
+    return True
+
+
+def _metric_kind(metric: str) -> str:
+    lowered = metric.strip().lower()
+    if lowered == "value":
+        return "value"
+    if "percent" in lowered:
+        return "percent"
+    return lowered
+
+
+def _format_crosstab_chunk(
+    sheet: str,
+    record: dict[str, Any],
+    percent_record: dict[str, Any] | None,
+) -> str:
+    lines = [f"Crosstab | {sheet}"]
+    question = str(record.get("question") or "").strip()
+    option = str(record.get("option") or "").strip()
+    if question:
+        lines.append(f"Question: {question}")
+    if option:
+        lines.append(f"Answer: {option}")
+    value_lines = _measure_lines(record.get("measures") or [], as_percent=False)
+    if value_lines:
+        heading = "Value:" if percent_record is not None or _metric_kind(record.get("metric") or "") == "value" else "Counts:"
+        if _metric_kind(record.get("metric") or "") == "percent" and percent_record is None:
+            heading = "Column percentage:"
+            value_lines = _measure_lines(record.get("measures") or [], as_percent=True)
+        lines.append(heading)
+        lines.extend(value_lines)
+    if percent_record is not None:
+        pct_lines = _measure_lines(percent_record.get("measures") or [], as_percent=True)
+        if pct_lines:
+            lines.append("Column percentage:")
+            lines.extend(pct_lines)
+    if len(lines) <= 3:
+        return ""
+    return "\n".join(lines)
+
+
+def _measure_lines(measures: list[tuple[str, str]], *, as_percent: bool) -> list[str]:
+    lines: list[str] = []
+    for header, raw in measures:
+        display = _format_measure(raw, as_percent=as_percent)
+        if not display:
+            continue
+        lines.append(f"- {header}: {display}")
+    return lines
+
+
+def _format_measure(raw: str, *, as_percent: bool) -> str:
+    if not raw:
+        return ""
+    if not as_percent or not _is_number(raw):
+        return raw
+    number = float(raw.replace(",", ""))
+    if 0 <= number <= 1:
+        return f"{number * 100:.1f}%"
+    return raw
 
 
 def _trim_rows(rows: list[tuple[int, list[Any]]], width: int) -> list[tuple[int, list[Any]]]:
@@ -439,6 +854,13 @@ def _is_number(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _write_jsonl_gz(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:

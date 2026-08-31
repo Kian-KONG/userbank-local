@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import gzip
+import json
+from pathlib import Path
+
 import httpx
 
 from .config import get_settings
@@ -123,10 +127,17 @@ async def rag_describe_pages(pages: list[dict]) -> list[str]:
     timeout_s = 300.0
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         for page in pages:
+            payload = {
+                "page_number": page.get("page_number"),
+                "image_base64": page.get("image_base64"),
+            }
+            mime = str(page.get("image_mime") or "").strip()
+            if mime:
+                payload["image_mime"] = mime
             resp = await client.post(
                 url,
                 headers=headers,
-                json={"pages": [page]},
+                json={"pages": [payload]},
             )
             if resp.status_code >= 400:
                 raise RuntimeError(
@@ -139,3 +150,41 @@ async def rag_describe_pages(pages: list[dict]) -> list[str]:
                 )
             descriptions.append(str(rows[0]))
     return descriptions
+
+
+async def rag_ingest_table(
+    group_id: str,
+    document_id: str,
+    bundle_dir: Path,
+    filename: str | None = None,
+) -> dict:
+    table_path = Path(bundle_dir) / "crosstab_long.jsonl.gz"
+    if not table_path.is_file():
+        raise RuntimeError("crosstab_long.jsonl.gz missing")
+    rows: list[dict] = []
+    with gzip.open(table_path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    catalog: list[dict] = []
+    catalog_path = Path(bundle_dir) / "question_catalog.json"
+    if catalog_path.is_file():
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    s = get_settings()
+    url = f"{s.rag_service_url.rstrip('/')}/api/v1/tables/ingest"
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if s.rag_internal_secret.strip():
+        headers["X-RAG-Secret"] = s.rag_internal_secret.strip()
+    payload = {
+        "group_id": group_id,
+        "document_id": document_id,
+        "filename": filename,
+        "rows": rows,
+        "catalog": catalog,
+    }
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"RAG table ingest HTTP {resp.status_code}: {resp.text}")
+    return resp.json()

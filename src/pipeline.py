@@ -12,7 +12,7 @@ import httpx
 
 from .config import get_settings
 from .flatten import flatten_for_export
-from .rag import rag_embed
+from .rag import rag_embed, rag_ingest_table
 
 BATCH = 16
 
@@ -69,6 +69,7 @@ async def export_knowledge_bundle(
 
     resolved_org = org_id or s.survey_org_id
     fname = filename or corpus_path.name or "document.json"
+    table_copied = _copy_sql_table_sidecars(corpus_path, output_dir, document_id)
     manifest = {
         "embedding_model": s.embedding_model,
         "dimensions": s.vector_store_dimension,
@@ -80,16 +81,28 @@ async def export_knowledge_bundle(
         "org_id": resolved_org,
         "job_id": str(uuid.uuid4()),
         "chunk_count": len(embedded_items),
+        "has_sql_table": table_copied,
     }
     (output_dir / "import.manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    if table_copied:
+        try:
+            await rag_ingest_table(
+                resolved_org,
+                document_id,
+                output_dir,
+                filename=fname,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"==> survey table ingest skipped: {exc}")
     return {
         "output_dir": str(output_dir),
         "document_id": document_id,
         "chunk_count": len(embedded_items),
         "org_id": resolved_org,
+        "has_sql_table": table_copied,
     }
 
 
@@ -165,6 +178,11 @@ async def upload_bundle(
 
     url = f"{api}{import_path}?groupId={quote(org)}"
     last_err: Exception | None = None
+    table = load_bundle_table(bundle_dir)
+    if manifest.get("has_sql_table") and not table:
+        raise RuntimeError("manifest has_sql_table but crosstab_long.jsonl.gz is missing")
+    if table:
+        payload["table"] = table
     async with httpx.AsyncClient(timeout=300.0) as client:
         for attempt in range(s.upload_http_retries + 1):
             try:
@@ -181,10 +199,43 @@ async def upload_bundle(
                         body = resp.json()
                     except Exception:  # noqa: BLE001
                         body = {"ok": True}
-                    return {"mode": "http", "result": body}
+                    return {
+                        "mode": "http",
+                        "result": body,
+                    }
                 last_err = RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
             if attempt < s.upload_http_retries:
                 await asyncio.sleep(1 << attempt)
     raise last_err or RuntimeError("upload failed")
+
+
+def _copy_sql_table_sidecars(corpus_path: Path, output_dir: Path, document_id: str) -> bool:
+    src = corpus_path.parent / "crosstab_long.jsonl.gz"
+    if not src.is_file():
+        return False
+    rows = read_jsonl_gz(src)
+    if not rows:
+        return False
+    stamped = [{**row, "document_id": document_id} for row in rows]
+    write_jsonl_gz(output_dir / "crosstab_long.jsonl.gz", stamped)
+    catalog_src = corpus_path.parent / "question_catalog.json"
+    if catalog_src.is_file():
+        catalog_dest = output_dir / "question_catalog.json"
+        catalog_dest.write_text(catalog_src.read_text(encoding="utf-8"), encoding="utf-8")
+    return True
+
+
+def load_bundle_table(bundle_dir: Path) -> dict[str, Any] | None:
+    table_path = bundle_dir / "crosstab_long.jsonl.gz"
+    if not table_path.is_file():
+        return None
+    rows = read_jsonl_gz(table_path)
+    if not rows:
+        return None
+    catalog: list[Any] = []
+    catalog_path = bundle_dir / "question_catalog.json"
+    if catalog_path.is_file():
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    return {"rows": rows, "catalog": catalog}

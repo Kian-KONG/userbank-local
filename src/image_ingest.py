@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import io
 import json
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 from .config import get_settings
 from .deck_synth import first_title_line, synthesize_deck
@@ -110,6 +114,161 @@ def _save_vision_checkpoint(work: Path, pages: list[dict[str, Any]]) -> None:
     )
 
 
+_MAX_VISION_CALLS_PER_PAGE = 12
+_MAX_TILE_DEPTH = 1
+_JPEG_MAX_SIDE = 1600
+_REJECTED_REGION = (
+    "[This region could not be described because the vision model repeatedly "
+    "rejected the image.]"
+)
+
+
+class _VisionBudget:
+    def __init__(self, limit: int = _MAX_VISION_CALLS_PER_PAGE) -> None:
+        self.limit = limit
+        self.used = 0
+
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+
+def _is_retryable_vision(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    if "budget exhausted" in text:
+        return False
+    if "vision http 5" in text or "vision http 429" in text:
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "model request failed",
+            "upstream proxy",
+            "timed out",
+            "timeout",
+            "connecterror",
+            "connection reset",
+        )
+    )
+
+
+def _encode_jpeg(image: Image.Image, *, max_side: int = _JPEG_MAX_SIDE, quality: int = 80) -> bytes:
+    width, height = image.size
+    long_side = max(width, height)
+    resized = image
+    if long_side > max_side:
+        scale = max_side / long_side
+        resized = image.resize(
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+    encoded = io.BytesIO()
+    resized.save(encoded, "JPEG", quality=quality, optimize=True)
+    return encoded.getvalue()
+
+
+async def _vision_describe(
+    image_base64: str,
+    page_number: int,
+    budget: _VisionBudget,
+    *,
+    mime: str,
+) -> str:
+    if budget.remaining() <= 0:
+        raise RuntimeError("Vision call budget exhausted")
+    budget.used += 1
+    return (
+        await rag_describe_pages(
+            [
+                {
+                    "page_number": page_number,
+                    "image_base64": image_base64,
+                    "image_mime": mime,
+                }
+            ]
+        )
+    )[0]
+
+
+async def _describe_page(png: Path, page_number: int) -> str:
+    budget = _VisionBudget()
+    png_b64 = base64.b64encode(png.read_bytes()).decode("ascii")
+    for attempt in range(2):
+        try:
+            return await _vision_describe(
+                png_b64, page_number, budget, mime="image/png"
+            )
+        except RuntimeError as exc:
+            if not _is_retryable_vision(exc):
+                raise
+            if attempt == 0:
+                await asyncio.sleep(1.5)
+
+    with Image.open(png) as source:
+        image = source.convert("RGB")
+    jpeg_b64 = base64.b64encode(_encode_jpeg(image)).decode("ascii")
+    try:
+        return await _vision_describe(
+            jpeg_b64, page_number, budget, mime="image/jpeg"
+        )
+    except RuntimeError as exc:
+        if not _is_retryable_vision(exc) and "budget exhausted" not in str(exc):
+            raise
+
+    parts = await _describe_tiles(image, page_number, budget)
+    return "\n\n".join(parts) if parts else _REJECTED_REGION
+
+
+async def _describe_tiles(
+    image: Image.Image,
+    page_number: int,
+    budget: _VisionBudget,
+    *,
+    depth: int = 0,
+    label: str = "page",
+) -> list[str]:
+    width, height = image.size
+    midpoint_x, midpoint_y = width // 2, height // 2
+    tiles = [
+        ("top-left", (0, 0, midpoint_x, midpoint_y)),
+        ("top-right", (midpoint_x, 0, width, midpoint_y)),
+        ("bottom-left", (0, midpoint_y, midpoint_x, height)),
+        ("bottom-right", (midpoint_x, midpoint_y, width, height)),
+    ]
+    descriptions: list[str] = []
+    for position, box in tiles:
+        tile = image.crop(box)
+        heading = f"### Vision tile: {label}/{position}"
+        if budget.remaining() <= 0 or min(tile.size) < 128:
+            descriptions.append(f"{heading}\n\n{_REJECTED_REGION}")
+            continue
+        encoded = _encode_jpeg(tile, max_side=max(tile.size), quality=85)
+        try:
+            description = await _vision_describe(
+                base64.b64encode(encoded).decode("ascii"),
+                page_number,
+                budget,
+                mime="image/jpeg",
+            )
+        except RuntimeError as exc:
+            if not _is_retryable_vision(exc) and "budget exhausted" not in str(exc):
+                raise
+            if depth >= _MAX_TILE_DEPTH or budget.remaining() <= 0:
+                descriptions.append(f"{heading}\n\n{_REJECTED_REGION}")
+                continue
+            descriptions.extend(
+                await _describe_tiles(
+                    tile,
+                    page_number,
+                    budget,
+                    depth=depth + 1,
+                    label=f"{label}/{position}",
+                )
+            )
+        else:
+            descriptions.append(f"{heading}\n\n{description}")
+    return descriptions
+
+
 async def ingest_image_document(
     input_path: Path,
     work: Path,
@@ -127,45 +286,67 @@ async def ingest_image_document(
         pngs = render_pdf_pages(pdf_path, page_dir)
 
     cached = _load_vision_checkpoint(work)
-    pages: list[dict[str, Any]] = []
+    pages_by_number: dict[int, dict[str, Any]] = {}
+    pending: list[tuple[int, Path]] = []
     total = len(pngs)
     for index, png in enumerate(pngs, start=1):
         page_number = _page_number_from_name(png) or index
         existing = cached.get(page_number)
         if existing is not None:
-            pages.append(
-                {
-                    "page_number": page_number,
-                    "title": existing.get("title") or native_titles.get(page_number) or "",
-                    "description": existing["description"],
-                }
-            )
+            pages_by_number[page_number] = {
+                "page_number": page_number,
+                "title": existing.get("title") or native_titles.get(page_number) or "",
+                "description": existing["description"],
+            }
             print(f"==> skip vision page {page_number}/{total}")
         else:
-            image_base64 = base64.b64encode(png.read_bytes()).decode("ascii")
-            descriptions = await rag_describe_pages(
-                [{"page_number": page_number, "image_base64": image_base64}]
-            )
-            description = descriptions[0]
-            title = native_titles.get(page_number) or first_title_line(description)
-            pages.append(
-                {
-                    "page_number": page_number,
-                    "title": title,
-                    "description": description,
-                }
-            )
-            print(f"==> vision page {page_number}/{total}")
-        _save_vision_checkpoint(work, pages)
+            pending.append((page_number, png))
+
+    lock = asyncio.Lock()
+
+    def _ordered_pages() -> list[dict[str, Any]]:
+        return [pages_by_number[n] for n in sorted(pages_by_number)]
+
+    async def _flush(done: int) -> None:
+        _save_vision_checkpoint(work, _ordered_pages())
         if on_progress is not None:
-            maybe = on_progress("vision", index, total)
+            maybe = on_progress("vision", done, total)
             if hasattr(maybe, "__await__"):
                 await maybe
+
+    await _flush(len(pages_by_number))
+    workers = max(1, int(get_settings().vision_concurrency or 1))
+    if pending:
+        print(f"==> vision concurrency {min(workers, len(pending))} remaining={len(pending)}")
+    sem = asyncio.Semaphore(workers)
+
+    async def _one(page_number: int, png: Path) -> None:
+        async with sem:
+            try:
+                description = await _describe_page(png, page_number)
+            except Exception as exc:  # noqa: BLE001
+                print(f"==> vision page {page_number}/{total} failed: {exc}")
+                description = f"{_REJECTED_REGION}\n\n({exc})"
+        title = native_titles.get(page_number) or first_title_line(description)
+        async with lock:
+            pages_by_number[page_number] = {
+                "page_number": page_number,
+                "title": title,
+                "description": description,
+            }
+            done = len(pages_by_number)
+            await _flush(done)
+        print(f"==> vision page {page_number}/{total}")
+
+    if pending:
+        await asyncio.gather(*[_one(number, png) for number, png in pending])
+
+    pages = _ordered_pages()
 
     try:
         synth = await synthesize_deck(pages)
     except Exception as exc:  # noqa: BLE001
-        print(f"==> deck synth skipped: {exc}")
+        print(f"==> deck synth skipped: {type(exc).__name__}: {exc}")
         synth = {"argument": "", "outline": [], "pages": []}
     by_page = {int(entry["page"]): entry for entry in synth.get("pages") or []}
     merged_pages: list[dict[str, Any]] = []

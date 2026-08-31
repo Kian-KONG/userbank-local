@@ -9,6 +9,13 @@ WORD_SUFFIXES = {".doc", ".docx"}
 OFFICE_SUFFIXES = DECK_SUFFIXES | WORD_SUFFIXES
 
 
+def _convert_timeout_seconds(input_path: Path) -> float:
+    size = input_path.stat().st_size if input_path.is_file() else 0
+    if size >= 50 * 1024 * 1024:
+        return 1800
+    return 600
+
+
 def soffice_bin() -> str | None:
     return shutil.which("soffice") or shutil.which("soffice.bin")
 
@@ -37,6 +44,13 @@ def convert_office_to_pdf(
             f"{suffix} needs LibreOffice (`soffice`) on PATH, or export to PDF first"
         )
     work.mkdir(parents=True, exist_ok=True)
+    converted = work / f"{input_path.stem}.pdf"
+    if (
+        converted.is_file()
+        and converted.stat().st_size > 0
+        and converted.stat().st_mtime >= input_path.stat().st_mtime
+    ):
+        return converted
     proc = subprocess.run(
         [
             soffice,
@@ -50,12 +64,11 @@ def convert_office_to_pdf(
         check=False,
         capture_output=True,
         text=True,
-        timeout=600,
+        timeout=_convert_timeout_seconds(input_path),
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(f"LibreOffice convert failed: {detail}")
-    converted = work / f"{input_path.stem}.pdf"
     if converted.exists():
         return converted
     matches = sorted(work.glob("*.pdf"))

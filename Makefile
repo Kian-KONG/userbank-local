@@ -6,17 +6,19 @@ NPM_REGISTRY := https://registry.npmmirror.com
 install:
 	@PY=$$(command -v python3.12 || command -v python3.11 || command -v python3); \
 	$$PY -m venv .venv
-	@printf '[global]\nindex-url = $(PIP_INDEX)\ntrusted-host = pypi.tuna.tsinghua.edu.cn\n' > .venv/pip.conf
+	@cp pip.conf .venv/pip.conf
 	.venv/bin/pip install -U pip -i $(PIP_INDEX)
 	.venv/bin/pip install -e ".[dev]" -i $(PIP_INDEX)
 	cd web && npm install --registry=$(NPM_REGISTRY)
 
 serve:
 	@test -d .venv || $(MAKE) install
+	@cp pip.conf .venv/pip.conf
 	.venv/bin/python -m src.main serve
 
 check:
 	@test -d .venv || $(MAKE) install
+	@cp pip.conf .venv/pip.conf
 	.venv/bin/python -c "from src.api import create_app; create_app(); print('ok')"
 	.venv/bin/python -m pytest tests -q
 

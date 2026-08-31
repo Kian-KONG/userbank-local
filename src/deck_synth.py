@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -139,6 +140,52 @@ def _load_json_object(raw: str) -> dict[str, Any]:
     return parsed
 
 
+_SYNTH_PAGE_CHUNK = 40
+_SYNTH_TIMEOUT_S = 300.0
+_SYNTH_MAX_TOKENS = 8192
+
+
+def merge_synth_parts(
+    parts: list[dict[str, Any]], page_numbers: list[int]
+) -> dict[str, Any]:
+    arguments = [str(part.get("argument") or "").strip() for part in parts]
+    arguments = [text for text in arguments if text]
+    outline: list[dict[str, Any]] = []
+    by_page: dict[int, dict[str, Any]] = {}
+    for part in parts:
+        for entry in part.get("outline") or []:
+            if isinstance(entry, dict):
+                outline.append(entry)
+        for entry in part.get("pages") or []:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                page = int(entry.get("page") or 0)
+            except (TypeError, ValueError):
+                continue
+            if page > 0:
+                by_page[page] = entry
+    pages_out = []
+    for page in page_numbers:
+        pages_out.append(
+            by_page.get(
+                page,
+                {
+                    "page": page,
+                    "section": "",
+                    "role": "evidence",
+                    "continues": None,
+                    "refers_to": [],
+                },
+            )
+        )
+    return {
+        "argument": " ".join(arguments).strip(),
+        "outline": outline,
+        "pages": pages_out,
+    }
+
+
 async def synthesize_deck(pages: list[dict[str, Any]]) -> dict[str, Any]:
     if not pages:
         raise ValueError("No pages to synthesize")
@@ -146,6 +193,20 @@ async def synthesize_deck(pages: list[dict[str, Any]]) -> dict[str, Any]:
     if not s.llm_api_key.strip():
         raise RuntimeError("LLM_API_KEY is required for deck synthesis")
     limit = max(80, int(s.synth_page_summary_chars))
+    if len(pages) <= _SYNTH_PAGE_CHUNK:
+        return await _synthesize_page_window(pages, limit)
+    windows = [
+        pages[index : index + _SYNTH_PAGE_CHUNK]
+        for index in range(0, len(pages), _SYNTH_PAGE_CHUNK)
+    ]
+    parts = [await _synthesize_page_window(window, limit) for window in windows]
+    return merge_synth_parts(parts, [int(page["page_number"]) for page in pages])
+
+
+async def _synthesize_page_window(
+    pages: list[dict[str, Any]], limit: int
+) -> dict[str, Any]:
+    s = get_settings()
     summaries = [
         page_summary(
             int(page["page_number"]),
@@ -156,25 +217,34 @@ async def synthesize_deck(pages: list[dict[str, Any]]) -> dict[str, Any]:
         for page in pages
     ]
     content = SYNTH_PROMPT + "\n\n" + "\n\n".join(summaries)
-    timeout_s = 180.0
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            s.llm_api_url,
-            json={
-                "model": s.llm_synth_model,
-                "messages": [{"role": "user", "content": content}],
-                "max_tokens": 8192,
-            },
-            headers={
-                "Authorization": f"Bearer {s.llm_api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=timeout_s,
-        )
-    if resp.is_error:
-        raise RuntimeError(
-            f"Deck synth HTTP {resp.status_code}: {resp.text.strip() or resp.reason_phrase}"
-        )
-    raw = resp.json()["choices"][0]["message"]["content"]
-    page_numbers = [int(page["page_number"]) for page in pages]
-    return parse_synth_json(raw, page_numbers)
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    s.llm_api_url,
+                    json={
+                        "model": s.llm_synth_model,
+                        "messages": [{"role": "user", "content": content}],
+                        "max_tokens": _SYNTH_MAX_TOKENS,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {s.llm_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=_SYNTH_TIMEOUT_S,
+                )
+            if resp.is_error:
+                raise RuntimeError(
+                    f"Deck synth HTTP {resp.status_code}: "
+                    f"{resp.text.strip() or resp.reason_phrase}"
+                )
+            raw = resp.json()["choices"][0]["message"]["content"]
+            page_numbers = [int(page["page_number"]) for page in pages]
+            return parse_synth_json(raw, page_numbers)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt == 0:
+                await asyncio.sleep(2.0)
+    assert last_error is not None
+    raise last_error

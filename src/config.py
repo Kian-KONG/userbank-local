@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_synth_model: str = "qwen3.7-max"
     vision_page_scale: float = 2.0
+    vision_concurrency: int = 6
     synth_page_summary_chars: int = 400
     excel_llm_columns: bool = False
 

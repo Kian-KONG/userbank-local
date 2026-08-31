@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.deck_synth import parse_synth_json
+from src.deck_synth import merge_synth_parts, parse_synth_json
 from src.flatten import flatten_deck, flatten_for_export, format_overview_text
 
 
@@ -76,6 +76,45 @@ def test_parse_synth_json_fills_missing_pages_and_roles():
     assert parsed["pages"][0]["refers_to"] == [2]
     assert parsed["pages"][1]["page"] == 2
     assert parsed["pages"][1]["role"] == "evidence"
+
+
+def test_merge_synth_parts_joins_windows():
+    merged = merge_synth_parts(
+        [
+            {
+                "argument": "Buyers first.",
+                "outline": [{"section": "Buyers", "pages": [1], "claim": "who"}],
+                "pages": [
+                    {
+                        "page": 1,
+                        "section": "Buyers",
+                        "role": "title",
+                        "continues": None,
+                        "refers_to": [],
+                    }
+                ],
+            },
+            {
+                "argument": "Installers next.",
+                "outline": [{"section": "Installers", "pages": [2], "claim": "who"}],
+                "pages": [
+                    {
+                        "page": 2,
+                        "section": "Installers",
+                        "role": "evidence",
+                        "continues": None,
+                        "refers_to": [],
+                    }
+                ],
+            },
+        ],
+        [1, 2, 3],
+    )
+    assert merged["argument"] == "Buyers first. Installers next."
+    assert [entry["section"] for entry in merged["outline"]] == ["Buyers", "Installers"]
+    assert merged["pages"][0]["role"] == "title"
+    assert merged["pages"][2]["page"] == 3
+    assert merged["pages"][2]["role"] == "evidence"
 
 
 def test_convert_office_pdf_passthrough(tmp_path: Path):
