@@ -115,7 +115,7 @@ async def rag_ready() -> dict:
 
 
 async def rag_describe_pages(pages: list[dict]) -> list[str]:
-    """One image per request to userbank-rag vision (qwen3.7-plus)."""
+    """One image per request to userbank-rag vision (qwen3.8-max)."""
     if not pages:
         return []
     s = get_settings()

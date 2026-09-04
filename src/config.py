@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     llm_api_url: str = "https://aigc.bosch.com.cn/llmservice/api/v1/chat/completions"
     llm_api_key: str = ""
-    llm_synth_model: str = "qwen3.7-max"
+    llm_synth_model: str = "qwen3.8-max"
     vision_page_scale: float = 2.0
     vision_concurrency: int = 6
     synth_page_summary_chars: int = 400

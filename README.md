@@ -30,5 +30,5 @@ cd web && npm install && npm run dev   # http://127.0.0.1:5174
 ## Notes
 
 - Frontend in `web/` talks to the FastAPI control plane on `:8780`.
-- Requires running `userbank-rag` for embeddings and PPT vision (`qwen3.7-plus`).
+- Requires running `userbank-rag` for embeddings and PPT vision (`qwen3.8-max`).
 - PDF reports / Word go through MinerU (Word is converted to PDF first). Slide-shaped PDFs and PPT/PPTM go through LibreOffice (if needed) → local pypdfium2 PNGs → rag vision. Excel is always table IR, never PDF/MinerU.

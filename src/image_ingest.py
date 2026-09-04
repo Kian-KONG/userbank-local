@@ -274,7 +274,7 @@ async def ingest_image_document(
     work: Path,
     on_progress: Any | None = None,
 ) -> Path:
-    """PDF/PPT → per-page Plus vision → Max deck synthesis → corpus JSON."""
+    """PDF/PPT → per-page qwen3.8-max vision → deck synthesis → corpus JSON."""
     work = work.expanduser().resolve()
     work.mkdir(parents=True, exist_ok=True)
     input_path = input_path.expanduser().resolve()

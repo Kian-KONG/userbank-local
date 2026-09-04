@@ -4,7 +4,7 @@
 |--|--------------------------|------------|
 | Repos | + MinerU + LibreOffice + **rag** (embed/vision) | api + web + **rag** (runtime) |
 | PDF / Word | Report PDF + DOCX→PDF → MinerU. Slide-shaped PDF → same vision path as PPT | Text + PDF → Qwen vision (runtime) |
-| PPT / PPTM | LibreOffice → PNG → rag `describe-pages` (`qwen3.7-plus`) | — |
+| PPT / PPTM | LibreOffice → PNG → rag `describe-pages` (`qwen3.8-max`) | — |
 | Excel | Workbook IR → sheet classify → chunks | — |
 | Embed | **Always on laptop** via local rag `/embeddings` | Import does **not** re-embed |
 | Progress | UI job `phase` + `progress` % + logs | — |
@@ -12,7 +12,7 @@
 
 ```
 PDF (report / A4) / DOCX:  (Word → PDF) → MinerU → corpus → embed → upload
-PDF (slides) / PPT*:       LibreOffice if needed → PNG → qwen3.7-plus → corpus → embed → upload
+PDF (slides) / PPT*:       LibreOffice if needed → PNG → qwen3.8-max → corpus → embed → upload
 Excel:                     IR + classify → chunks → embed → upload
 Markdown:                  local corpus → embed → upload
 ```
