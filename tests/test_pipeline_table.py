@@ -20,7 +20,7 @@ def test_copy_sql_table_sidecars_stamps_document_id(tmp_path: Path) -> None:
     bundle.mkdir()
     assert _copy_sql_table_sidecars(parse_dir / "doc_corpus.json", bundle, "doc-9") is True
     rows = json.loads(
-        __import__("gzip").open(bundle / "crosstab_long.jsonl.gz", "rt", encoding="utf-8").read().splitlines()[0]
+        __import__("gzip").open(bundle / "table_rows.jsonl.gz", "rt", encoding="utf-8").read().splitlines()[0]
     )
     assert rows["document_id"] == "doc-9"
     assert (bundle / "question_catalog.json").is_file()
@@ -31,3 +31,4 @@ def test_copy_sql_table_sidecars_stamps_document_id(tmp_path: Path) -> None:
     assert payload is not None
     assert payload["rows"][0]["option"] == "25-34"
     assert payload["catalog"][0]["question"] == "Age"
+    assert payload["table_kind"] == "survey"

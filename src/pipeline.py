@@ -18,6 +18,16 @@ BATCH = 16
 
 ProgressCb = Callable[[int, int], Any]
 
+TABLE_ROWS_FILES = ("table_rows.jsonl.gz", "crosstab_long.jsonl.gz")
+
+
+def _table_rows_path(directory: Path) -> Path | None:
+    for name in TABLE_ROWS_FILES:
+        path = directory / name
+        if path.is_file():
+            return path
+    return None
+
 
 def ensure_output_subdir(name: str) -> Path:
     directory = get_settings().work_dir() / name
@@ -180,7 +190,7 @@ async def upload_bundle(
     last_err: Exception | None = None
     table = load_bundle_table(bundle_dir)
     if manifest.get("has_sql_table") and not table:
-        raise RuntimeError("manifest has_sql_table but crosstab_long.jsonl.gz is missing")
+        raise RuntimeError("manifest has_sql_table but table_rows.jsonl.gz is missing")
     if table:
         payload["table"] = table
     async with httpx.AsyncClient(timeout=300.0) as client:
@@ -212,24 +222,27 @@ async def upload_bundle(
 
 
 def _copy_sql_table_sidecars(corpus_path: Path, output_dir: Path, document_id: str) -> bool:
-    src = corpus_path.parent / "crosstab_long.jsonl.gz"
-    if not src.is_file():
+    src = _table_rows_path(corpus_path.parent)
+    if src is None:
         return False
     rows = read_jsonl_gz(src)
     if not rows:
         return False
     stamped = [{**row, "document_id": document_id} for row in rows]
-    write_jsonl_gz(output_dir / "crosstab_long.jsonl.gz", stamped)
+    write_jsonl_gz(output_dir / "table_rows.jsonl.gz", stamped)
     catalog_src = corpus_path.parent / "question_catalog.json"
     if catalog_src.is_file():
         catalog_dest = output_dir / "question_catalog.json"
         catalog_dest.write_text(catalog_src.read_text(encoding="utf-8"), encoding="utf-8")
+    meta_src = corpus_path.parent / "table_meta.json"
+    if meta_src.is_file():
+        (output_dir / "table_meta.json").write_text(meta_src.read_text(encoding="utf-8"), encoding="utf-8")
     return True
 
 
 def load_bundle_table(bundle_dir: Path) -> dict[str, Any] | None:
-    table_path = bundle_dir / "crosstab_long.jsonl.gz"
-    if not table_path.is_file():
+    table_path = _table_rows_path(bundle_dir)
+    if table_path is None:
         return None
     rows = read_jsonl_gz(table_path)
     if not rows:
@@ -238,4 +251,21 @@ def load_bundle_table(bundle_dir: Path) -> dict[str, Any] | None:
     catalog_path = bundle_dir / "question_catalog.json"
     if catalog_path.is_file():
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    return {"rows": rows, "catalog": catalog}
+    table_kind = "survey"
+    schema_text = None
+    meta_path = bundle_dir / "table_meta.json"
+    if meta_path.is_file():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if isinstance(meta, dict):
+            raw_kind = meta.get("table_kind")
+            if raw_kind is None or str(raw_kind).strip() == "":
+                table_kind = "survey"
+            else:
+                table_kind = str(raw_kind).strip().lower()
+                if table_kind not in {"survey", "generic"}:
+                    table_kind = "generic"
+            schema_text = meta.get("schema_text")
+    payload: dict[str, Any] = {"rows": rows, "catalog": catalog, "table_kind": table_kind}
+    if schema_text:
+        payload["schema_text"] = schema_text
+    return payload

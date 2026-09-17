@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from src.excel.survey import materialize_crosstab_table
 from src.excel_ingest import (
     classify_table,
     excel_to_chunks,
@@ -110,14 +111,15 @@ def _crosstab_counts_grid() -> list[list[object]]:
 def test_crosstab_headers_use_country_and_cluster() -> None:
     tables = _tables_from_grid("Crosstabulation Counts & %", _crosstab_counts_grid())
     assert len(tables) == 1
-    headers = tables[0].headers
+    assert classify_table(tables[0].headers, tables[0].rows) == "crosstab"
+    assert " cluster " not in " ".join(tables[0].headers)
+    headers = materialize_crosstab_table(tables[0]).headers
     assert headers[:4] == ["question", "option", "metric", "Overall"]
     assert "USA" in headers
     assert "Japan" in headers
     assert "USA cluster 1" in headers
     assert "Global cluster 4" in headers
     assert headers.count("USA") == 1
-    assert classify_table(headers, tables[0].rows) == "crosstab"
 
 
 def test_crosstab_chunks_pair_value_and_percent_and_skip_junk() -> None:
@@ -255,9 +257,79 @@ def test_crosstab_unpivot_and_catalog_sidecars(tmp_path: Path) -> None:
     assert 2 in age["clusters"]
 
     dest = parse_tabular_input(path, tmp_path / "parse")
-    long_path = dest.parent / "crosstab_long.jsonl.gz"
+    long_path = dest.parent / "table_rows.jsonl.gz"
     catalog_path = dest.parent / "question_catalog.json"
     assert long_path.is_file()
     assert catalog_path.is_file()
     catalog_disk = json.loads(catalog_path.read_text(encoding="utf-8"))
     assert catalog_disk[0]["question"]
+    meta = json.loads((dest.parent / "table_meta.json").read_text(encoding="utf-8"))
+    assert meta["table_kind"] == "survey"
+
+
+def test_classify_chinese_codebook_and_question() -> None:
+    assert classify_table(["变量", "代码", "标签"], [(2, ["age", 1, "18-24"])]) == "codebook"
+    assert classify_table(
+        ["问题", "非常不同意", "同意"],
+        [(2, ["冬天这套系统每天用都够可靠。", "1", ""])],
+    ) == "matrix_questionnaire"
+
+
+def test_kv_form_chunks_use_key_value() -> None:
+    from src.excel.ir import TableBlock
+
+    table = TableBlock(
+        sheet="Profile",
+        headers=["Field", "Value"],
+        rows=[(2, ["Company", "Bosch"]), (3, ["Year", "2024"])],
+        start_row=2,
+        end_row=3,
+        kind="kv_form",
+    )
+    chunks = table_to_chunks(table, "profile.xlsx")
+    assert chunks[0]["metadata"]["chunk_type"] == "excel_kv"
+    assert "Company: Bosch" in chunks[0]["text"]
+
+
+def test_generic_table_writes_inferred_sidecar(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    path = tmp_path / "sales.xlsx"
+    wb = Workbook()
+    sheet = wb.active
+    assert sheet is not None
+    sheet.title = "Sales"
+    sheet["A1"] = "Region"
+    sheet["B1"] = "Units"
+    sheet["A2"] = "EU"
+    sheet["B2"] = 10
+    wb.save(path)
+
+    dest = parse_tabular_input(path, tmp_path / "parse")
+    meta = json.loads((dest.parent / "table_meta.json").read_text(encoding="utf-8"))
+    assert meta["table_kind"] == "generic"
+    assert "Units" in meta["schema_text"] or "units" in meta["schema_text"].lower()
+    chunks = json.loads(dest.read_text(encoding="utf-8"))["chunks"]
+    assert any(c["metadata"].get("chunk_type") == "excel_schema" for c in chunks)
+    assert any("Region: EU" in c["text"] for c in chunks)
+    assert all(c["metadata"].get("excel_sheet") != "Sales" or c["metadata"].get("table_kind") != "survey" for c in chunks)
+    assert (dest.parent / "table_rows.jsonl.gz").is_file()
+
+
+def test_heatmap_name_on_ordinary_table_is_kept(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    path = tmp_path / "named.xlsx"
+    wb = Workbook()
+    sheet = wb.active
+    assert sheet is not None
+    sheet.title = "Q1 Heat Map"
+    sheet["A1"] = "Region"
+    sheet["B1"] = "Units"
+    sheet["A2"] = "EU"
+    sheet["B2"] = 3
+    wb.save(path)
+    chunks = excel_to_chunks(path)
+    assert chunks
+    assert any(c["metadata"].get("excel_sheet") == "Q1 Heat Map" for c in chunks)
+    assert any("Region: EU" in c["text"] for c in chunks)
