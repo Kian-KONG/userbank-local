@@ -3,15 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from src.excel.survey import materialize_crosstab_table
+from src.excel.ir import TableBlock, tables_from_grid
+from src.excel.layout import classify_table, emit_table, table_to_chunks
+from src.excel.survey import (
+    materialize_crosstab_table,
+    repeating_int_cycle,
+    skip_duplicate_crosstab_sheet,
+)
 from src.excel_ingest import (
-    classify_table,
     excel_to_chunks,
     parse_excel_workbook,
     parse_tabular_input,
-    table_to_chunks,
-    _skip_duplicate_crosstab_sheet,
-    _tables_from_grid,
 )
 from src.flatten import flatten_for_export
 from src.routing import file_kind
@@ -32,7 +34,7 @@ def test_skip_title_row_keeps_real_headers() -> None:
         ["EU", "Heat pump", 10],
         ["DE", "Boiler", 5],
     ]
-    tables = _tables_from_grid("Sales", grid)
+    tables = tables_from_grid("Sales", grid)
     assert len(tables) == 1
     assert tables[0].headers == ["Region", "Product", "Units"]
     assert tables[0].rows[0][0] == 3
@@ -109,7 +111,7 @@ def _crosstab_counts_grid() -> list[list[object]]:
 
 
 def test_crosstab_headers_use_country_and_cluster() -> None:
-    tables = _tables_from_grid("Crosstabulation Counts & %", _crosstab_counts_grid())
+    tables = tables_from_grid("Crosstabulation Counts & %", _crosstab_counts_grid())
     assert len(tables) == 1
     assert classify_table(tables[0].headers, tables[0].rows) == "crosstab"
     assert " cluster " not in " ".join(tables[0].headers)
@@ -122,8 +124,42 @@ def test_crosstab_headers_use_country_and_cluster() -> None:
     assert headers.count("USA") == 1
 
 
+def test_repeating_int_cycle_finds_shortest_period() -> None:
+    assert repeating_int_cycle([1, 2, 3, 4, 1, 2, 3, 4]) == [1, 2, 3, 4]
+    assert repeating_int_cycle([1, 2, 3, 1, 2, 3]) == [1, 2, 3]
+    assert repeating_int_cycle([1, 2, 3, 4, 5, 1, 2, 3, 4, 5]) == [1, 2, 3, 4, 5]
+    assert repeating_int_cycle([1, 2, 3, 4]) is None
+    assert repeating_int_cycle([1, 1, 1, 1, 1, 1]) is None
+    assert repeating_int_cycle([10, 20, 30, 40, 50, 60, 70, 80]) is None
+
+
+def test_three_cluster_crosstab_is_inferred() -> None:
+    grid = [
+        [None, None, None, None, "USA", "Japan", "Global", "Global", "Global", "USA", "USA", "USA"],
+        [None, None, None, None, None, None, 1, 2, 3, 1, 2, 3],
+        ["What age group do you fall under?", "25-34", "Value", 100, 50, 40, 10, 20, 30, 5, 15, 25],
+        [None, None, "Column Percentage", 0.1, 0.2, 0.15, 0.1, 0.2, 0.3, 0.05, 0.15, 0.25],
+    ]
+    tables = tables_from_grid("Crosstabulation Counts & %", grid)
+    assert classify_table(tables[0].headers, tables[0].rows) == "crosstab"
+    headers = materialize_crosstab_table(tables[0]).headers
+    assert "USA cluster 1" in headers
+    assert "USA cluster 3" in headers
+    assert "Global cluster 3" in headers
+    assert all("cluster 4" not in h for h in headers)
+    emitted = emit_table(tables[0], "three.xlsx", "knowledge")
+    assert emitted.table_kind == "survey"
+    clusters = {row["cluster"] for row in emitted.sql_rows}
+    assert clusters == {None, 1, 2, 3}
+    catalog_text = next(
+        c["text"] for c in emitted.chunks if c["metadata"].get("chunk_type") == "excel_crosstab"
+    )
+    assert "USA cluster 3" in catalog_text
+    assert "cluster 4" not in catalog_text
+
+
 def test_crosstab_chunks_pair_value_and_percent_and_skip_junk() -> None:
-    tables = _tables_from_grid("Crosstabulation Counts & %", _crosstab_counts_grid())
+    tables = tables_from_grid("Crosstabulation Counts & %", _crosstab_counts_grid())
     table = tables[0]
     table.kind = "crosstab"
     chunks = table_to_chunks(table, "crosstab.xlsx")
@@ -142,9 +178,9 @@ def test_crosstab_chunks_pair_value_and_percent_and_skip_junk() -> None:
 def test_heatmap_sheets_are_skipped(tmp_path: Path) -> None:
     from openpyxl import Workbook
 
-    assert _skip_duplicate_crosstab_sheet("Crosstabulation % Heat Map")
-    assert _skip_duplicate_crosstab_sheet("Ranking Q Top 2 % Heat Map")
-    assert not _skip_duplicate_crosstab_sheet("Crosstabulation Counts & %")
+    assert skip_duplicate_crosstab_sheet("Crosstabulation % Heat Map")
+    assert skip_duplicate_crosstab_sheet("Ranking Q Top 2 % Heat Map")
+    assert not skip_duplicate_crosstab_sheet("Crosstabulation Counts & %")
 
     path = tmp_path / "crosstab.xlsx"
     wb = Workbook()
@@ -167,7 +203,6 @@ def test_heatmap_sheets_are_skipped(tmp_path: Path) -> None:
     heat["F2"] = 2
     heat["G2"] = 3
     heat["H2"] = 4
-    heat["A3"] = "Must Have"
     heat["A3"] = "Quiet"
     counts = wb.create_sheet("Ranking Q Top 2 Counts")
     counts["A1"] = None
@@ -265,6 +300,10 @@ def test_crosstab_unpivot_and_catalog_sidecars(tmp_path: Path) -> None:
     assert catalog_disk[0]["question"]
     meta = json.loads((dest.parent / "table_meta.json").read_text(encoding="utf-8"))
     assert meta["table_kind"] == "survey"
+    assert "1, 2, 3, 4" in meta["schema_text"]
+    catalog_chunk = next(c for c in chunks if c["metadata"].get("chunk_type") == "excel_catalog")
+    assert "cluster 1, 2, 3, 4" in catalog_chunk["text"]
+    assert "cluster 1-4" not in catalog_chunk["text"]
 
 
 def test_classify_chinese_codebook_and_question() -> None:
@@ -276,8 +315,6 @@ def test_classify_chinese_codebook_and_question() -> None:
 
 
 def test_kv_form_chunks_use_key_value() -> None:
-    from src.excel.ir import TableBlock
-
     table = TableBlock(
         sheet="Profile",
         headers=["Field", "Value"],
@@ -314,6 +351,11 @@ def test_generic_table_writes_inferred_sidecar(tmp_path: Path) -> None:
     assert any("Region: EU" in c["text"] for c in chunks)
     assert all(c["metadata"].get("excel_sheet") != "Sales" or c["metadata"].get("table_kind") != "survey" for c in chunks)
     assert (dest.parent / "table_rows.jsonl.gz").is_file()
+
+    _chunks, sql_rows, catalog = parse_excel_workbook(path)
+    assert sql_rows
+    assert sql_rows[0]["Region"] == "EU"
+    assert catalog[0]["sheet"] == "Sales"
 
 
 def test_heatmap_name_on_ordinary_table_is_kept(tmp_path: Path) -> None:

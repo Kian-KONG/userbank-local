@@ -319,17 +319,7 @@ def table_to_chunks(
     source_file: str,
     track: str = "knowledge",
 ) -> list[dict[str, Any]]:
-    if table.kind == "notes":
-        return NotesAdapter().emit(table, source_file, track).chunks
-    if table.kind == "codebook":
-        return CodebookAdapter().emit(table, source_file, track).chunks
-    if table.kind == "crosstab":
-        return SurveyCrosstabAdapter().emit(table, source_file, track).chunks
-    if table.kind == "kv_form":
-        return KvFormAdapter().emit(table, source_file, track).chunks
-    if table.kind == "matrix_questionnaire":
-        return MatrixAdapter().emit(table, source_file, track).chunks
-    return _row_chunks(table, source_file, track, sheet_kind=table.kind or "data_table")
+    return emit_table(table, source_file, track).chunks
 
 
 def emit_table(table: TableBlock, source_file: str, track: str) -> LayoutEmit:
