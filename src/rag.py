@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from .config import get_settings
+from .table_sidecar import resolve_table_kind, table_rows_path
 
 
 async def rag_embed(texts: list[str], input_type: str = "document") -> list[list[float]]:
@@ -158,10 +159,8 @@ async def rag_ingest_table(
     bundle_dir: Path,
     filename: str | None = None,
 ) -> dict:
-    table_path = Path(bundle_dir) / "table_rows.jsonl.gz"
-    if not table_path.is_file():
-        table_path = Path(bundle_dir) / "crosstab_long.jsonl.gz"
-    if not table_path.is_file():
+    table_path = table_rows_path(Path(bundle_dir))
+    if table_path is None:
         raise RuntimeError("table_rows.jsonl.gz missing")
     rows: list[dict] = []
     with gzip.open(table_path, "rt", encoding="utf-8") as handle:
@@ -178,20 +177,13 @@ async def rag_ingest_table(
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if s.rag_internal_secret.strip():
         headers["X-RAG-Secret"] = s.rag_internal_secret.strip()
-    table_kind = "generic"
-    schema_text = None
+    meta: dict | None = None
     meta_path = Path(bundle_dir) / "table_meta.json"
     if meta_path.is_file():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if isinstance(meta, dict):
-            raw_kind = str(meta.get("table_kind") or "").strip().lower()
-            if raw_kind in {"survey", "generic"}:
-                table_kind = raw_kind
-            elif not raw_kind:
-                table_kind = "survey"
-            else:
-                table_kind = "generic"
-            schema_text = meta.get("schema_text")
+        loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            meta = loaded
+    table_kind, schema_text = resolve_table_kind(meta)
     payload = {
         "group_id": group_id,
         "document_id": document_id,

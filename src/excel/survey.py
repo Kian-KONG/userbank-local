@@ -8,16 +8,23 @@ from .ir import TableBlock
 
 HEATMAP_SHEET = re.compile(r"heat\s*map", re.I)
 PLACEHOLDER_CELL = re.compile(r"^\$\{.+\}$")
-MEASURE_CLUSTER = re.compile(r"^(?P<country>.+?)\s+cluster\s+(?P<cluster>[1-4])$", re.I)
+MEASURE_CLUSTER = re.compile(r"^(?P<country>.+?)\s+cluster\s+(?P<cluster>\d+)$", re.I)
+MAX_CLUSTER_ID = 20
 
-SURVEY_SCHEMA_TEXT = """Table survey (
+
+def survey_schema_text(clusters: list[int] | None = None) -> str:
+    if clusters:
+        cluster_note = f"{', '.join(str(c) for c in clusters)}, or NULL for the country/market total"
+    else:
+        cluster_note = "segment id as stored, or NULL for the country/market total"
+    return f"""Table survey (
   document_id VARCHAR,
   source_file VARCHAR,
   sheet VARCHAR,
   question VARCHAR,   -- exact question or feature text from the catalog
   option VARCHAR,     -- answer / row label (e.g. 21-34, Must Have, Somewhat favorable)
   country VARCHAR,    -- market name as stored (Japan, USA, HongKong, Hong Kong, Global, Overall, …)
-  cluster INTEGER,    -- 1-4, or NULL for the country/market total
+  cluster INTEGER,    -- {cluster_note}
   metric VARCHAR,     -- 'count' (headcount) or 'pct' (column share as a 0-1 fraction)
   value DOUBLE
 )
@@ -31,28 +38,51 @@ Report metric='pct' to humans as a percentage (value * 100, one decimal).
 """
 
 
+SURVEY_SCHEMA_TEXT = survey_schema_text()
+
+
 def skip_duplicate_crosstab_sheet(sheet: str) -> bool:
     return bool(HEATMAP_SHEET.search(sheet or ""))
 
 
-def is_cluster_id_row(row: list[Any]) -> bool:
+def repeating_int_cycle(ids: list[int]) -> list[int] | None:
+    n = len(ids)
+    if n < 4:
+        return None
+    for period in range(2, n // 2 + 1):
+        if n < 2 * period:
+            continue
+        cycle = ids[:period]
+        if len(set(cycle)) != period:
+            continue
+        if min(cycle) < 1 or max(cycle) > MAX_CLUSTER_ID:
+            continue
+        expected = (cycle * ((n // period) + 1))[:n]
+        if expected == ids:
+            return cycle
+    return None
+
+
+def cluster_cycle(row: list[Any]) -> list[int] | None:
     filled = [cell_str(v) for v in row if cell_str(v)]
-    if len(filled) < 8:
-        return False
-    ids: list[str] = []
+    ids: list[int] = []
     for value in filled:
         if not is_number(value):
-            return False
+            return None
         number = float(value.replace(",", ""))
-        if number not in {1.0, 2.0, 3.0, 4.0}:
-            return False
-        ids.append(str(int(number)))
-    return ids[:4] == ["1", "2", "3", "4"] and ids[4:8] == ["1", "2", "3", "4"]
+        if number != int(number) or number < 1:
+            return None
+        ids.append(int(number))
+    return repeating_int_cycle(ids)
+
+
+def is_cluster_id_row(row: list[Any]) -> bool:
+    return cluster_cycle(row) is not None
 
 
 def is_crosstab_headers(headers: list[str]) -> bool:
     cluster_headers = [h for h in headers if " cluster " in h]
-    return len(cluster_headers) >= 8
+    return len(cluster_headers) >= 4
 
 
 def looks_like_crosstab(table: TableBlock) -> bool:
@@ -81,7 +111,7 @@ def cluster_token(value: str) -> str:
     if not value or not is_number(value):
         return ""
     number = float(value.replace(",", ""))
-    if number not in {1.0, 2.0, 3.0, 4.0}:
+    if number != int(number) or number < 1 or number > MAX_CLUSTER_ID:
         return ""
     return str(int(number))
 
@@ -326,12 +356,28 @@ def build_question_catalog(long_rows: list[dict[str, Any]]) -> list[dict[str, An
     return catalog
 
 
+def catalog_clusters(catalog: list[dict[str, Any]]) -> list[int]:
+    ids: set[int] = set()
+    for entry in catalog:
+        for cluster in entry.get("clusters") or []:
+            ids.add(int(cluster))
+    return sorted(ids)
+
+
+def cluster_lookup_hint(clusters: list[Any]) -> str:
+    ids = [str(c) for c in clusters if str(c).strip() != ""]
+    if not ids:
+        return "cluster (NULL for country totals)"
+    return "cluster " + ", ".join(ids)
+
+
 def catalog_chunks(catalog: list[dict[str, Any]], source_file: str) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
     for index, entry in enumerate(catalog):
         question = entry["question"]
         options = entry.get("options") or []
         countries = entry.get("countries") or []
+        clusters = entry.get("clusters") or []
         preview = "; ".join(str(item) for item in options[:12])
         if len(options) > 12:
             preview += "; …"
@@ -342,7 +388,7 @@ def catalog_chunks(catalog: list[dict[str, Any]], source_file: str) -> list[dict
             f"Options ({entry.get('option_count') or len(options)}): {preview}\n"
             f"Countries: {', '.join(str(item) for item in countries)}\n"
             "Look up counts (metric=count) and column percentages (metric=pct) "
-            "by country and cluster 1-4 in the survey table."
+            f"by country and {cluster_lookup_hint(clusters)} in the survey table."
         )
         chunks.append(
             chunk(

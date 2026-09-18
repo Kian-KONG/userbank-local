@@ -5,23 +5,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .excel.ir import TableBlock, load_workbook_tables, tables_from_grid
-from .excel.layout import (
-    classify_table,
-    emit_table,
-    maybe_column_map,
-    table_to_chunks,
-)
+from .excel.ir import load_workbook_tables
+from .excel.layout import emit_table
 from .excel.survey import (
     build_question_catalog,
     catalog_chunks,
-    skip_duplicate_crosstab_sheet,
+    catalog_clusters,
+    survey_schema_text,
     SURVEY_SCHEMA_TEXT,
 )
-
-# Test and CLI compatibility aliases.
-_tables_from_grid = tables_from_grid
-_skip_duplicate_crosstab_sheet = skip_duplicate_crosstab_sheet
 
 
 def parse_tabular_input(
@@ -87,7 +79,7 @@ def parse_excel_workbook(
     path: Path, track: str = "knowledge"
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     parsed = parse_excel_workbook_result(path, track=track)
-    return parsed["chunks"], parsed["sql_rows"] if parsed["table_kind"] == "survey" else [], parsed["catalog"] if parsed["table_kind"] == "survey" else []
+    return parsed["chunks"], parsed["sql_rows"], parsed["catalog"]
 
 
 def parse_excel_workbook_result(path: Path, track: str = "knowledge") -> dict[str, Any]:
@@ -114,12 +106,13 @@ def parse_excel_workbook_result(path: Path, track: str = "knowledge") -> dict[st
     catalog = build_question_catalog(survey_rows)
     chunks.extend(catalog_chunks(catalog, path.name))
     if survey_rows:
+        observed = catalog_clusters(catalog)
         return {
             "chunks": chunks,
             "sql_rows": survey_rows,
             "catalog": catalog,
             "table_kind": "survey",
-            "schema_text": schema_text or SURVEY_SCHEMA_TEXT,
+            "schema_text": survey_schema_text(observed) if observed else (schema_text or SURVEY_SCHEMA_TEXT),
         }
     return {
         "chunks": chunks,
@@ -160,15 +153,9 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 __all__ = [
-    "TableBlock",
-    "classify_table",
     "excel_to_chunks",
     "load_workbook_tables",
-    "maybe_column_map",
     "parse_excel_workbook",
     "parse_excel_workbook_result",
     "parse_tabular_input",
-    "table_to_chunks",
-    "_skip_duplicate_crosstab_sheet",
-    "_tables_from_grid",
 ]

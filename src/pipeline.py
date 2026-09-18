@@ -13,20 +13,11 @@ import httpx
 from .config import get_settings
 from .flatten import flatten_for_export
 from .rag import rag_embed, rag_ingest_table
+from .table_sidecar import resolve_table_kind, table_rows_path
 
 BATCH = 16
 
 ProgressCb = Callable[[int, int], Any]
-
-TABLE_ROWS_FILES = ("table_rows.jsonl.gz", "crosstab_long.jsonl.gz")
-
-
-def _table_rows_path(directory: Path) -> Path | None:
-    for name in TABLE_ROWS_FILES:
-        path = directory / name
-        if path.is_file():
-            return path
-    return None
 
 
 def ensure_output_subdir(name: str) -> Path:
@@ -222,7 +213,7 @@ async def upload_bundle(
 
 
 def _copy_sql_table_sidecars(corpus_path: Path, output_dir: Path, document_id: str) -> bool:
-    src = _table_rows_path(corpus_path.parent)
+    src = table_rows_path(corpus_path.parent)
     if src is None:
         return False
     rows = read_jsonl_gz(src)
@@ -241,7 +232,7 @@ def _copy_sql_table_sidecars(corpus_path: Path, output_dir: Path, document_id: s
 
 
 def load_bundle_table(bundle_dir: Path) -> dict[str, Any] | None:
-    table_path = _table_rows_path(bundle_dir)
+    table_path = table_rows_path(bundle_dir)
     if table_path is None:
         return None
     rows = read_jsonl_gz(table_path)
@@ -251,20 +242,13 @@ def load_bundle_table(bundle_dir: Path) -> dict[str, Any] | None:
     catalog_path = bundle_dir / "question_catalog.json"
     if catalog_path.is_file():
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    table_kind = "survey"
-    schema_text = None
+    meta: dict[str, Any] | None = None
     meta_path = bundle_dir / "table_meta.json"
     if meta_path.is_file():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if isinstance(meta, dict):
-            raw_kind = meta.get("table_kind")
-            if raw_kind is None or str(raw_kind).strip() == "":
-                table_kind = "survey"
-            else:
-                table_kind = str(raw_kind).strip().lower()
-                if table_kind not in {"survey", "generic"}:
-                    table_kind = "generic"
-            schema_text = meta.get("schema_text")
+        loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            meta = loaded
+    table_kind, schema_text = resolve_table_kind(meta)
     payload: dict[str, Any] = {"rows": rows, "catalog": catalog, "table_kind": table_kind}
     if schema_text:
         payload["schema_text"] = schema_text
